@@ -1,0 +1,12 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+yt-dlp>=2025.1.15
+httpx>=0.27.0
+bleach
+tinycss2>=6.1.0
+imageio-ffmpeg>=0.5.1
+python-dotenv>=1.0.1
+
+# Optional: transcribe videos without captions.
+# Enable with WHISPER_ENABLED=1 and uncomment the line below.
+# faster-whisper>=1.1.0

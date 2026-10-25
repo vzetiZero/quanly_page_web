@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Chuyển video YouTube thành bài báo bằng AI và đăng lên news247us.cfx.bz">
+  <title>News247US Studio — Video thành bài báo</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="wrap header-inner">
+      <div class="brand">
+        <div class="brand-mark">N</div>
+        <div>
+          <div class="brand-name">News247US <span>Studio</span></div>
+          <div class="brand-sub">Video → Transcript → Bài báo → Đăng bài</div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <span class="pill" id="pill-backend"><i class="dot"></i><span>Python</span></span>
+        <span class="pill" id="pill-ai"><i class="dot"></i><span>Gemini</span></span>
+        <span class="pill" id="pill-site"><i class="dot"></i><span>Website</span></span>
+        <span class="pill" id="pill-facebook"><i class="dot"></i><span>Facebook</span></span>
+        <button class="btn btn-ghost" id="btn-facebook-menu" type="button">Page Facebook</button>
+        <button class="btn btn-ghost" id="btn-settings" type="button">Cài đặt</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap layout">
+    <section class="col-main">
+      <div class="card" id="card-source">
+        <div class="card-head">
+          <div class="step-badge">1</div>
+          <div class="grow">
+            <h2>Chọn video nguồn</h2>
+            <p>Dán link YouTube. Hệ thống lấy transcript, phân tích và viết bài báo tiếng Anh (hoặc tiếng Việt).</p>
+          </div>
+        </div>
+
+        <form id="form-source" novalidate>
+          <label class="field">
+            <span class="label">Link video</span>
+            <input id="input-url" type="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off" spellcheck="false">
+          </label>
+
+          <div class="grid-3">
+            <label class="field">
+              <span class="label">Ngôn ngữ bài viết</span>
+              <select id="select-language">
+                <option value="en">English (khuyến nghị)</option>
+                <option value="vi">Tiếng Việt</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="label">Giọng văn</span>
+              <select id="select-tone">
+                <option value="neutral">Trung lập / tin tức</option>
+                <option value="dramatic">Gay cấn / kể chuyện</option>
+                <option value="analytical">Phân tích / chuyên sâu</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="label">Độ dài</span>
+              <select id="select-length">
+                <option value="short">Ngắn (450–600 từ)</option>
+                <option value="standard">Tiêu chuẩn (750–1000 từ)</option>
+                <option value="long">Dài (1100–1500 từ)</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="grid-2">
+            <label class="field">
+              <span class="label">Danh mục gợi ý</span>
+              <select id="select-category">
+                <option value="">Để AI tự chọn</option>
+              </select>
+              <span class="hint">Dùng để AI chọn đúng giọng bài. API đăng bài chưa nhận category.</span>
+            </label>
+            <label class="field">
+              <span class="label">Yêu cầu thêm (tùy chọn)</span>
+              <input id="input-instructions" placeholder="VD: nhấn mạnh diễn biến phiên tòa" maxlength="1000">
+            </label>
+          </div>
+
+          <div class="form-actions">
+            <button class="btn btn-primary" id="btn-analyze" type="submit">Phân tích &amp; viết bài</button>
+            <span class="muted small">Video 10–30 phút thường mất 30–90 giây.</span>
+          </div>
+        </form>
+      </div>
+
+      <div class="card" id="card-progress" hidden>
+        <div class="card-head">
+          <div class="step-badge">2</div>
+          <div class="grow">
+            <h2>Đang xử lý</h2>
+            <p id="progress-message">Đang chuẩn bị...</p>
+          </div>
+          <button class="btn btn-danger btn-mini" id="btn-cancel-job" type="button" hidden>HUỶ</button>
+          <button class="btn btn-mini" id="btn-hide-progress" type="button">Thu nhỏ</button>
+        </div>
+
+        <div class="progress-track"><div class="progress-bar" id="progress-bar"></div></div>
+
+        <ol class="stepper" id="stepper">
+          <li data-step="transcript">
+            <span class="dot">1</span>
+            <div><strong>Lấy transcript</strong><small>Metadata và phụ đề YouTube</small></div>
+          </li>
+          <li data-step="analyze">
+            <span class="dot">2</span>
+            <div><strong>AI phân tích</strong><small>Đọc transcript, chọn góc bài</small></div>
+          </li>
+          <li data-step="write">
+            <span class="dot">3</span>
+            <div><strong>Viết bài</strong><small>Tiêu đề, SEO, nội dung HTML</small></div>
+          </li>
+        </ol>
+
+        <div class="error-box" id="progress-error" hidden>
+          <strong>Không hoàn tất được</strong>
+          <p id="progress-error-text"></p>
+          <button class="btn btn-mini" id="btn-retry" type="button">Thử lại</button>
+        </div>
+
+        <details class="transcript-box" id="transcript-details">
+          <summary>Transcript <span id="transcript-words" class="muted"></span></summary>
+          <pre id="transcript-text"></pre>
+        </details>
+      </div>
+
+      <div class="card" id="card-result" hidden>
+        <div class="card-head">
+          <div class="step-badge">3</div>
+          <div class="grow">
+            <h2>Biên tập &amp; đăng bài</h2>
+            <div class="meta-row" id="source-meta"></div>
+          </div>
+          <span class="badge" id="draft-badge">Bản nháp</span>
+        </div>
+
+        <div class="editor-grid">
+          <div class="editor-main">
+            <label class="field">
+              <span class="label">Tiêu đề</span>
+              <input id="edit-title" maxlength="140">
+            </label>
+
+            <label class="field">
+              <span class="label">Permalink</span>
+              <div class="input-prefix">
+                <span>news247us.cfx.bz/blog/</span>
+                <input id="edit-permalink" spellcheck="false">
+              </div>
+            </label>
+
+            <label class="field">
+              <span class="label">Mô tả SEO <span class="counter" id="seo-count">0/160</span></span>
+              <textarea id="edit-seo" rows="2" maxlength="160"></textarea>
+            </label>
+
+            <div class="grid-2">
+              <label class="field">
+                <span class="label">Tags (cách nhau dấu phẩy)</span>
+                <input id="edit-tags" placeholder="true crime, courtroom, viral">
+              </label>
+              <label class="field">
+                <span class="label">Danh mục</span>
+                <select id="edit-category">
+                  <option value="">Không chọn</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="tabs">
+              <button type="button" class="tab active" data-tab="content">Nội dung HTML</button>
+              <button type="button" class="tab" data-tab="preview">Xem trước</button>
+              <span class="spacer"></span>
+              <span class="muted small" id="word-count"></span>
+            </div>
+
+            <textarea id="edit-content" class="code-area" spellcheck="false"></textarea>
+            <div class="preview-pane" id="preview-pane" hidden>
+              <iframe id="preview-frame" sandbox="" title="Xem trước bài viết"></iframe>
+            </div>
+            <div class="hint warn" id="preview-warnings" hidden></div>
+          </div>
+
+          <div class="editor-side">
+            <div class="field">
+              <span class="label">Ảnh bìa (chèn đầu bài)</span>
+              <div class="thumb-preview">
+                <img id="thumb-img" alt="Ảnh bìa bài viết">
+                <div class="thumb-empty" id="thumb-empty">Chưa có ảnh</div>
+              </div>
+              <div class="row-actions">
+                <button type="button" class="btn btn-mini" id="btn-upload-image">Tải ảnh khác</button>
+                <button type="button" class="btn btn-mini" id="btn-use-youtube">Thumbnail video</button>
+              </div>
+              <input id="file-image" type="file" accept="image/*" hidden>
+              <span class="hint">Ảnh được tải lên kho của website và chèn vào đầu bài.</span>
+            </div>
+
+            <div class="field">
+              <span class="label">Video nguồn</span>
+              <div class="video-chip">
+                <span id="video-label">YouTube</span>
+                <a id="video-link" href="#" target="_blank" rel="noopener">Mở video</a>
+              </div>
+              <span class="hint">Video được nhúng tự động sau đoạn mở đầu.</span>
+            </div>
+
+            <div class="field">
+              <span class="label">Ghi chú từ AI</span>
+              <ul class="key-points" id="key-points"></ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="success-box" id="publish-result" hidden>
+          <strong>Đã đăng bài thành công</strong>
+          <p><a id="publish-link" href="#" target="_blank" rel="noopener"></a></p>
+          <div class="visibility-line" id="publish-visibility" hidden>
+            <span class="status-dot" id="visibility-dot"></span>
+            <span id="visibility-text"></span>
+          </div>
+          <div class="visibility-hint" id="visibility-hint" hidden></div>
+          <div class="row-actions">
+            <button type="button" class="btn btn-mini" id="btn-copy-link">Sao chép link</button>
+            <button type="button" class="btn btn-mini" id="btn-check-visibility">Kiểm tra trang chủ</button>
+            <a class="btn btn-mini" id="btn-open-home" href="#" target="_blank" rel="noopener">Mở trang chủ</a>
+            <a class="btn btn-mini" id="btn-open-admin" href="#" target="_blank" rel="noopener">Quản trị website</a>
+          </div>
+        </div>
+
+        <div class="publish-bar">
+          <div class="publish-status">
+            <span class="status-dot" id="publish-dot"></span>
+            <span id="publish-state">Sẵn sàng đăng</span>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn btn-ghost" id="btn-save-draft">Lưu nháp</button>
+            <button type="button" class="btn btn-primary" id="btn-publish">Đăng lên news247us</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" id="card-facebook" hidden>
+        <div class="card-head">
+          <div class="step-badge fb-badge">FB</div>
+          <div class="grow">
+            <h2>Đăng Facebook Reels</h2>
+            <p>AI chọn đoạn hay, cắt clip dọc 9:16, viết tiêu đề/mô tả và tự đăng lên các Page đã chọn.</p>
+          </div>
+          <span class="badge" id="fb-badge">Chưa cấu hình</span>
+        </div>
+
+        <div class="fb-config-line" id="fb-summary">Chưa cấu hình Facebook.</div>
+        <label class="field fb-hashtag-field">
+          <span class="label">Hashtag gắn vào title</span>
+          <input id="fb-hashtags" placeholder="#news #breaking" maxlength="200" spellcheck="false">
+          <span class="hint">Gắn vào cuối tiêu đề mỗi clip. Được lưu lại cho lần sau.</span>
+        </label>
+        <div class="row-actions">
+          <button class="btn btn-ghost btn-mini" id="btn-fb-settings" type="button">Cấu hình Page</button>
+          <button class="btn btn-primary" id="btn-fb-run" type="button">Tạo clip &amp; đăng Facebook</button>
+          <button class="btn btn-danger" id="btn-fb-cancel" type="button" hidden>HUỶ</button>
+        </div>
+
+        <div class="fb-progress" id="fb-progress" hidden>
+          <div class="progress-track"><div class="progress-bar" id="fb-bar"></div></div>
+          <div class="publish-status">
+            <span class="status-dot busy" id="fb-dot"></span>
+            <span id="fb-message">Đang xử lý...</span>
+          </div>
+          <ol class="fb-log" id="fb-log"></ol>
+        </div>
+
+        <div class="error-box" id="fb-error" hidden>
+          <strong>Đăng Facebook thất bại</strong>
+          <p id="fb-error-text"></p>
+        </div>
+
+        <div class="fb-results" id="fb-results" hidden></div>
+
+        <details class="fb-history" id="fb-history-box" hidden>
+          <summary>Lần đăng gần đây</summary>
+          <div class="history-list" id="fb-history-list"></div>
+        </details>
+      </div>
+    </section>
+
+    <aside class="col-side">
+      <div class="card">
+        <div class="card-head small-head">
+          <h3>Lịch sử</h3>
+          <button class="btn btn-mini" id="btn-refresh-history" type="button">Làm mới</button>
+        </div>
+        <div class="history-list" id="history-list">
+          <p class="muted small">Chưa có bài nào.</p>
+        </div>
+      </div>
+
+      <div class="card info-card">
+        <h3>Quy trình</h3>
+        <ol class="mini-steps">
+          <li>Lấy metadata và phụ đề YouTube.</li>
+          <li>Gemini đọc transcript và viết bài theo phong cách tin tức.</li>
+          <li>Bạn biên tập, chọn ảnh, rồi đăng lên website.</li>
+          <li>Tùy chọn: AI cắt clip Reels 9:16 và tự đăng lên các Page Facebook.</li>
+        </ol>
+        <p class="hint">API đăng bài nhận tiêu đề, nội dung HTML, permalink, mô tả SEO và tags. Danh mục cùng ảnh đại diện hiển thị ngoài trang chủ cần chỉnh trong admin website.</p>
+      </div>
+    </aside>
+  </main>
+
+  <dialog id="dialog-settings" class="dialog">
+    <div class="dialog-head">
+      <div>
+        <h2>Cài đặt kết nối</h2>
+        <p class="muted small">Key được lưu cục bộ trong <code>data/config.json</code>.</p>
+      </div>
+      <button type="button" class="icon-btn" id="btn-close-settings" aria-label="Đóng">×</button>
+    </div>
+
+    <div class="dialog-body">
+      <section class="settings-section">
+        <h3>Gemini / LLM</h3>
+        <p class="hint">Vilao AI: Base URL <code>https://api.vilao.ai/v1</code>, kiểu <strong>OpenAI-compatible</strong>, key dạng <code>sk-</code>. Google Gemini chính thức: giữ Base URL mặc định và dùng key <code>AIza...</code>.</p>
+        <label class="field">
+          <span class="label">Base URL</span>
+          <input id="set-gemini-base" spellcheck="false" placeholder="https://generativelanguage.googleapis.com">
+        </label>
+        <label class="field">
+          <span class="label">API key</span>
+          <input id="set-gemini-key" type="password" autocomplete="off" placeholder="Dán key mới để thay đổi">
+          <span class="hint" id="set-gemini-hint"></span>
+        </label>
+        <div class="grid-2">
+          <label class="field">
+            <span class="label">Model</span>
+            <input id="set-gemini-model" list="model-suggestions" spellcheck="false">
+            <datalist id="model-suggestions">
+              <option value="chib/gemini-3.8-flash"></option>
+              <option value="gemini-2.5-flash"></option>
+              <option value="gemini-2.5-pro"></option>
+              <option value="gemini-2.0-flash"></option>
+            </datalist>
+          </label>
+          <label class="field">
+            <span class="label">Kiểu API</span>
+            <select id="set-gemini-style">
+              <option value="auto">Tự động theo Base URL</option>
+              <option value="google">Google Gemini</option>
+              <option value="openai">OpenAI-compatible</option>
+            </select>
+          </label>
+        </div>
+        <button type="button" class="btn btn-ghost" id="btn-test-ai">Kiểm tra AI</button>
+        <div class="test-result" id="test-ai-result" hidden></div>
+      </section>
+
+      <section class="settings-section">
+        <h3>Website đăng bài</h3>
+        <label class="field">
+          <span class="label">API Base URL</span>
+          <input id="set-site-base" spellcheck="false" placeholder="https://news247us.cfx.bz/api">
+        </label>
+        <label class="field">
+          <span class="label">API key</span>
+          <input id="set-site-key" type="password" autocomplete="off" placeholder="Dán key mới để thay đổi">
+          <span class="hint" id="set-site-hint"></span>
+        </label>
+        <button type="button" class="btn btn-ghost" id="btn-test-site">Kiểm tra website</button>
+        <div class="test-result" id="test-site-result" hidden></div>
+      </section>
+
+      <section class="settings-section">
+        <h3>Mặc định</h3>
+        <div class="grid-3">
+          <label class="field">
+            <span class="label">Ngôn ngữ</span>
+            <select id="set-language">
+              <option value="en">English</option>
+              <option value="vi">Tiếng Việt</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="label">Giọng văn</span>
+            <select id="set-tone">
+              <option value="neutral">Trung lập</option>
+              <option value="dramatic">Gay cấn</option>
+              <option value="analytical">Phân tích</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="label">Độ dài</span>
+            <select id="set-length">
+              <option value="short">Ngắn</option>
+              <option value="standard">Tiêu chuẩn</option>
+              <option value="long">Dài</option>
+            </select>
+          </label>
+        </div>
+      </section>
+    </div>
+
+    <div class="dialog-foot">
+      <span class="muted small" id="settings-status"></span>
+      <div class="form-actions">
+        <button type="button" class="btn btn-ghost" id="btn-cancel-settings">Đóng</button>
+        <button type="button" class="btn btn-primary" id="btn-save-settings">Lưu cài đặt</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="dialog-facebook" class="dialog">
+    <div class="dialog-head">
+      <div>
+        <h2>Cấu hình Facebook Page</h2>
+        <p class="muted small">Token và Page được lưu cục bộ trong <code>data/facebook.json</code>.</p>
+      </div>
+      <button type="button" class="icon-btn" id="btn-close-facebook" aria-label="Đóng">×</button>
+    </div>
+
+    <div class="dialog-body">
+      <section class="settings-section">
+        <h3>Kết nối &amp; Page nhận bài</h3>
+        <p class="hint">Dùng user access token có quyền <code>pages_show_list</code>, <code>pages_read_engagement</code>, <code>pages_manage_posts</code>. App tự đổi sang Page token qua <code>/me/accounts</code>.</p>
+        <label class="field">
+          <span class="label">User access token</span>
+          <input id="set-fb-token" type="password" autocomplete="off" placeholder="Dán token mới để thay đổi">
+          <span class="hint" id="set-fb-token-hint"></span>
+        </label>
+        <div class="grid-2">
+          <label class="field">
+            <span class="label">Graph API version</span>
+            <input id="set-fb-version" value="v25.0" spellcheck="false">
+          </label>
+          <label class="field">
+            <span class="label">Số clip mỗi video</span>
+            <input id="set-fb-clip-count" type="number" min="1" max="10" value="5">
+          </label>
+        </div>
+        <div class="row-actions">
+          <button type="button" class="btn btn-ghost" id="btn-fb-test">Kiểm tra token</button>
+          <button type="button" class="btn btn-ghost" id="btn-fb-load-pages">Tải danh sách Page</button>
+        </div>
+        <div class="test-result" id="test-fb-result" hidden></div>
+        <div class="fb-pages" id="fb-pages">
+          <p class="muted small">Chưa tải danh sách Page.</p>
+        </div>
+      </section>
+    </div>
+
+    <div class="dialog-foot">
+      <span class="muted small" id="facebook-status"></span>
+      <div class="form-actions">
+        <button type="button" class="btn btn-ghost" id="btn-cancel-facebook">Đóng</button>
+        <button type="button" class="btn btn-primary" id="btn-save-facebook">Lưu cấu hình Page</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div class="toast-stack" id="toasts" aria-live="polite"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
