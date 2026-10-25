@@ -181,6 +181,7 @@ Sau khi bài viết được tạo, thẻ **Đăng Facebook Reels** xuất hiệ
 Lưu ý:
 
 - Mỗi Page chỉ đăng **1 clip ngẫu nhiên** trong số clip đã tạo; 5 clip × 3 Page = 3 lần đăng. Clip được xáo trộn để các Page nhận clip khác nhau khi số clip đủ.
+- Nếu số Page nhiều hơn số clip, clip được dùng lại cho Page dư; **mọi Page vẫn đăng đúng 1 clip** kèm title, mô tả, hashtag đầy đủ.
 - Nếu một Page lỗi, các Page còn lại vẫn tiếp tục; job chỉ báo lỗi hoàn toàn khi tất cả lần đăng đều thất bại.
 - Video gốc phải có phụ đề (hoặc bật Whisper) và dài hơn độ dài clip tối thiểu. Giới hạn mặc định 2 giờ/video.
 - File tạm được xoá sau khi job kết thúc. Đặt `keepFiles` khi gọi API nội bộ nếu cần giữ clip để kiểm tra.

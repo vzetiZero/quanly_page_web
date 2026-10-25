@@ -167,8 +167,11 @@ function updateFacebookUi() {
     if (badge) badge.textContent = 'Sẵn sàng';
     if (summary) {
       const tags = cfg.hashtags ? cfg.hashtags : 'không hashtag';
+      const clipCount = Number(cfg.clipCount) || 0;
+      const reuse =
+        selected > clipCount ? ' · Page dư sẽ dùng lại clip' : '';
       summary.textContent =
-        `${selected} Page · ${cfg.clipCount} clip tạo ra · mỗi Page nhận 1 clip ngẫu nhiên · ${cfg.minSeconds}–${cfg.maxSeconds}s · ${tags}`;
+        `${selected} Page · ${clipCount} clip tạo ra · mỗi Page nhận 1 clip ngẫu nhiên${reuse} · ${cfg.minSeconds}–${cfg.maxSeconds}s · ${tags}`;
     }
     setPill('facebook', 'ok', `${selected} Page sẵn sàng`);
   }
