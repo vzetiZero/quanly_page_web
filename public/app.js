@@ -30,7 +30,6 @@ const state = {
   fbPolls: 0,
   fbRunning: false,
   fbResult: null,
-  fbPages: [],
   fbLastStage: ''
 };
 
@@ -45,6 +44,7 @@ async function init() {
     loadFacebookConfig(),
     loadFbHistory()
   ]);
+  if (location.hash === '#facebook') switchView('facebook');
 }
 
 /* ---------- API ---------- */
@@ -87,21 +87,11 @@ async function loadHealth() {
   try {
     const health = await api('/health');
     state.config = health.config;
-    const pyOk = Boolean(health.python && health.python.ok);
-    setPill('backend', pyOk ? 'ok' : 'bad', pyOk ? 'Python worker sẵn sàng' : 'Python worker chưa chạy');
-    setPill(
-      'ai',
-      health.aiConfigured ? 'ok' : 'warn',
-      health.aiConfigured ? 'Đã có API key AI' : 'Chưa cấu hình API key AI'
-    );
-    setPill(
-      'site',
-      health.siteConfigured ? 'ok' : 'warn',
-      health.siteConfigured ? 'Đã có API key website' : 'Chưa cấu hình API key website'
-    );
     applyConfigToForm();
+    if (health.python && !health.python.ok) {
+      toast('Python worker chưa chạy. Phân tích video sẽ không hoạt động.', 'bad');
+    }
   } catch (err) {
-    setPill('backend', 'bad', err.message);
     toast(err.message, 'bad');
   }
 }
@@ -112,7 +102,7 @@ async function loadCategories() {
     state.categories = Array.isArray(items) ? items : [];
     fillCategorySelects();
   } catch (err) {
-    setPill('site', 'bad', `Không tải được danh mục: ${err.message}`);
+    console.warn('[categories]', err);
   }
 }
 
@@ -131,10 +121,11 @@ async function loadFacebookConfig() {
     const data = await api('/facebook/config');
     state.fbConfig = data.config;
     updateFacebookUi();
-    if ($('#dialog-facebook').open) renderFbSettings();
+    renderFbSettings();
   } catch (err) {
     console.warn('[facebook]', err);
-    setPill('facebook', 'bad', `Không tải được cấu hình Facebook: ${err.message}`);
+    const status = $('#facebook-status');
+    if (status) status.textContent = `Không tải được cấu hình Facebook: ${err.message}`;
   }
 }
 
@@ -146,25 +137,27 @@ function updateFacebookUi() {
   const selected = (cfg.selectedPageIds || []).filter((id) => usable.has(String(id))).length;
   const ready = Boolean(cfg.hasAccessToken && selected);
   const badge = $('#fb-badge');
+  const configBadge = $('#fb-config-badge');
   const summary = $('#fb-summary');
   const runButton = $('#btn-fb-run');
 
+  let badgeText = 'Chưa cấu hình';
+  let configText = 'Chưa cấu hình';
   if (!cfg.hasAccessToken) {
-    if (badge) badge.textContent = 'Chưa cấu hình';
     if (summary) {
       summary.textContent =
-        'Chưa có Facebook access token. Mở Cài đặt để dán token và chọn Page.';
+        'Chưa có Facebook access token. Mở tab Facebook Page để dán token và chọn Page.';
     }
-    setPill('facebook', 'warn', 'Chưa cấu hình Facebook');
   } else if (!selected) {
-    if (badge) badge.textContent = 'Chưa chọn Page';
+    badgeText = 'Chưa chọn Page';
+    configText = 'Chưa chọn Page';
     if (summary) {
       summary.textContent =
-        'Đã có token nhưng chưa chọn Page. Vào Cài đặt, tải danh sách và tick Page muốn đăng.';
+        'Đã có token nhưng chưa chọn Page. Mở tab Facebook Page, tải danh sách và tick Page muốn đăng.';
     }
-    setPill('facebook', 'warn', 'Chưa chọn Facebook Page');
   } else {
-    if (badge) badge.textContent = 'Sẵn sàng';
+    badgeText = 'Sẵn sàng';
+    configText = `Sẵn sàng · ${selected} Page`;
     if (summary) {
       const tags = cfg.hashtags ? cfg.hashtags : 'không hashtag';
       const clipCount = Number(cfg.clipCount) || 0;
@@ -173,10 +166,18 @@ function updateFacebookUi() {
       summary.textContent =
         `${selected} Page · ${clipCount} clip tạo ra · mỗi Page nhận 1 clip ngẫu nhiên${reuse} · ${cfg.minSeconds}–${cfg.maxSeconds}s · ${tags}`;
     }
-    setPill('facebook', 'ok', `${selected} Page sẵn sàng`);
   }
 
-  if (state.fbRunning && badge) badge.textContent = 'Đang chạy...';
+  if (state.fbRunning) {
+    badgeText = 'Đang chạy...';
+    configText = 'Đang chạy...';
+  }
+
+  for (const item of [badge, configBadge]) {
+    if (!item) continue;
+    item.textContent = item === badge ? badgeText : configText;
+    item.classList.toggle('published', ready && !state.fbRunning);
+  }
 
   const hashtagInput = $('#fb-hashtags');
   if (hashtagInput) {
@@ -199,6 +200,8 @@ function updateCancelButtons() {
   if (jobButton) jobButton.hidden = !state.jobId;
   const fbButton = $('#btn-fb-cancel');
   if (fbButton) fbButton.hidden = !state.fbRunning;
+  const saveButton = $('#btn-fb-save');
+  if (saveButton) saveButton.disabled = state.fbRunning;
 }
 
 async function loadFbHistory() {
@@ -354,12 +357,11 @@ async function startFacebookJob() {
   $('#fb-message').textContent = 'Đang gửi yêu cầu...';
   $('#fb-dot').className = 'status-dot busy';
   updateFacebookUi();
-  $('#card-facebook').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $('#card-facebook').scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
 
   try {
     const response = await api('/facebook/jobs', { method: 'POST', body: { url, hashtags } });
     state.fbJobId = response.jobId;
-    state.fbPages = response.pages || [];
     pollFacebookJob();
   } catch (err) {
     state.fbRunning = false;
@@ -591,19 +593,26 @@ function renderFbResults(result, running) {
 
 /* ---------- Facebook settings ---------- */
 
+function normalizeSearch(text) {
+  return String(text || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
 function renderFbSettings() {
   const cfg = state.fbConfig || {};
   const tokenInput = $('#set-fb-token');
   if (tokenInput) {
     tokenInput.value = '';
     tokenInput.placeholder = cfg.hasAccessToken
-      ? `Đã lưu ${cfg.accessTokenHint || ''} — để trống nếu giữ nguyên`
+      ? 'Để trống nếu giữ token hiện tại'
       : 'Dán user access token';
   }
   const hint = $('#set-fb-token-hint');
   if (hint) {
     hint.textContent = cfg.hasAccessToken
-      ? `Đã lưu token ${cfg.accessTokenHint || ''}.`
+      ? `Đã lưu token ${cfg.accessTokenHint || ''} trên máy này.`
       : 'Chưa có token.';
   }
   $('#set-fb-version').value = cfg.apiVersion || 'v25.0';
@@ -618,8 +627,10 @@ function renderFbPages(pages, selectedIds) {
   if (!pages.length) {
     const empty = document.createElement('p');
     empty.className = 'muted small';
-    empty.textContent = 'Chưa tải danh sách Page. Dán token rồi bấm "Tải danh sách Page".';
+    empty.textContent = 'Chưa có Page nào. Dán token rồi bấm "Tải danh sách Page".';
     container.appendChild(empty);
+    updateFbSelectionCount();
+    filterFbPages();
     return;
   }
 
@@ -627,6 +638,9 @@ function renderFbPages(pages, selectedIds) {
   for (const page of pages) {
     const label = document.createElement('label');
     label.className = 'fb-page-option';
+    label.dataset.search = normalizeSearch(
+      [page.name, page.id, page.category, (page.tasks || []).join(' ')].filter(Boolean).join(' ')
+    );
 
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
@@ -635,16 +649,78 @@ function renderFbPages(pages, selectedIds) {
     label.appendChild(checkbox);
 
     const text = document.createElement('span');
+    text.className = 'fb-page-name';
     text.textContent = page.name || page.id;
-    const meta = [page.category, (page.tasks || []).join(', ')].filter(Boolean).join(' · ');
-    if (meta) {
+
+    if (page.category) {
       const small = document.createElement('small');
-      small.textContent = ` ${meta}`;
+      small.textContent = page.category;
       text.appendChild(small);
     }
+
+    if (!page.hasToken) {
+      const warn = document.createElement('em');
+      warn.className = 'page-token';
+      warn.textContent = 'Thiếu token';
+      text.appendChild(warn);
+    }
+
     label.appendChild(text);
     container.appendChild(label);
   }
+
+  updateFbSelectionCount();
+  filterFbPages();
+}
+
+function filterFbPages() {
+  const input = $('#fb-page-search');
+  const query = normalizeSearch(input ? input.value.trim() : '');
+  const rows = $$('#fb-pages .fb-page-option');
+  let visible = 0;
+
+  for (const row of rows) {
+    const match = !query || (row.dataset.search || '').includes(query);
+    row.hidden = !match;
+    if (match) visible += 1;
+  }
+
+  const empty = $('#fb-pages-empty');
+  if (empty) {
+    if (query && rows.length && !visible) {
+      empty.hidden = false;
+      empty.textContent = `Không có Page nào khớp “${input.value.trim()}”.`;
+    } else {
+      empty.hidden = true;
+      empty.textContent = '';
+    }
+  }
+}
+
+function updateFbSelectionCount() {
+  const boxes = $$('#fb-pages input[type="checkbox"]');
+  const selected = boxes.filter((box) => box.checked).length;
+  const badge = $('#fb-selected-count');
+  if (badge) {
+    badge.textContent = boxes.length ? `${selected}/${boxes.length} Page đã chọn` : 'Chưa có Page';
+    badge.classList.toggle('published', boxes.length > 0 && selected === boxes.length);
+  }
+
+  const search = $('#fb-page-search');
+  if (search) search.disabled = !boxes.length;
+  for (const id of ['#btn-fb-select-all', '#btn-fb-clear-pages']) {
+    const button = $(id);
+    if (button) button.disabled = !boxes.length;
+  }
+}
+
+function setVisibleFbPages(checked) {
+  for (const row of $$('#fb-pages .fb-page-option')) {
+    if (row.hidden) continue;
+    const box = $('input[type="checkbox"]', row);
+    if (box) box.checked = checked;
+  }
+  updateFbSelectionCount();
 }
 
 function collectFbSelectedPageIds() {
@@ -710,10 +786,12 @@ async function loadFacebookPages() {
       body: { accessToken: token || undefined, apiVersion: version || undefined }
     });
     state.fbConfig = response.config;
+    const search = $('#fb-page-search');
+    if (search) search.value = '';
     renderFbSettings();
     updateFacebookUi();
     box.className = 'test-result ok';
-    box.textContent = `Đã tải ${response.count} Page. Tick Page muốn đăng rồi bấm "Lưu cài đặt".`;
+    box.textContent = `Đã tải ${response.count} Page. Tick Page muốn đăng rồi bấm "Lưu cấu hình Page".`;
     toast(`Đã tải ${response.count} Page.`, 'ok');
   } catch (err) {
     box.className = 'test-result bad';
@@ -723,15 +801,56 @@ async function loadFacebookPages() {
   }
 }
 
-/* ---------- Status & helpers ---------- */
+/* ---------- Views ---------- */
 
-function setPill(name, status, title) {
-  const pill = $(`#pill-${name}`);
-  if (!pill) return;
-  pill.classList.remove('ok', 'bad', 'warn');
-  if (status) pill.classList.add(status);
-  pill.title = title || '';
+function scrollBehavior() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
 }
+
+function switchView(view) {
+  const isFacebook = view === 'facebook';
+  const workspace = $('#view-workspace');
+  const facebook = $('#view-facebook');
+  if (!workspace || !facebook) return;
+
+  workspace.hidden = isFacebook;
+  facebook.hidden = !isFacebook;
+
+  for (const tab of $$('.view-tab')) {
+    const active = tab.dataset.view === view;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
+  }
+
+  if (isFacebook && !state.fbConfig) loadFacebookConfig();
+
+  const url = isFacebook ? '#facebook' : location.pathname + location.search;
+  history.replaceState(null, '', url);
+  window.scrollTo({ top: 0, behavior: scrollBehavior() });
+}
+
+function openFacebookView() {
+  switchView('facebook');
+  const search = $('#fb-page-search');
+  const token = $('#set-fb-token');
+  const target = search && !search.disabled ? search : token;
+  if (target) target.focus({ preventScroll: true });
+}
+
+function onViewTabKeydown(event) {
+  if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+  event.preventDefault();
+  const tabs = $$('.view-tab');
+  const current = tabs.indexOf(document.activeElement);
+  if (current < 0) return;
+  const step = event.key === 'ArrowRight' ? 1 : -1;
+  const next = tabs[(current + step + tabs.length) % tabs.length];
+  next.focus();
+  switchView(next.dataset.view);
+}
+
+/* ---------- Helpers ---------- */
 
 function applyConfigToForm() {
   if (!state.config) return;
@@ -930,29 +1049,24 @@ function bindEvents() {
   $('#btn-fb-run').addEventListener('click', startFacebookJob);
   $('#btn-fb-cancel').addEventListener('click', cancelAllJobs);
   $('#fb-hashtags').addEventListener('change', saveFbHashtags);
-  $('#btn-fb-settings').addEventListener('click', openFacebookSettings);
-  $('#btn-facebook-menu').addEventListener('click', openFacebookSettings);
+  $('#btn-fb-settings').addEventListener('click', openFacebookView);
+
+  $$('.view-tab').forEach((tab) => {
+    tab.addEventListener('click', () => switchView(tab.dataset.view));
+    tab.addEventListener('keydown', onViewTabKeydown);
+  });
+
   $('#btn-fb-test').addEventListener('click', testFacebookToken);
   $('#btn-fb-load-pages').addEventListener('click', loadFacebookPages);
-  $('#btn-close-facebook').addEventListener('click', closeFacebookSettings);
-  $('#btn-cancel-facebook').addEventListener('click', closeFacebookSettings);
-  $('#btn-save-facebook').addEventListener('click', async () => {
-    try {
-      await saveFacebookSettings({ close: true });
-    } catch (err) {
-      $('#facebook-status').textContent = err.message;
-      toast(err.message, 'bad');
-    }
-  });
+  $('#btn-fb-save').addEventListener('click', () => saveFacebookSettings());
+  $('#fb-page-search').addEventListener('input', filterFbPages);
+  $('#btn-fb-select-all').addEventListener('click', () => setVisibleFbPages(true));
+  $('#btn-fb-clear-pages').addEventListener('click', () => setVisibleFbPages(false));
+  $('#fb-pages').addEventListener('change', updateFbSelectionCount);
 
   const dialog = $('#dialog-settings');
   dialog.addEventListener('click', (event) => {
     if (event.target === dialog) closeSettings();
-  });
-
-  const fbDialog = $('#dialog-facebook');
-  fbDialog.addEventListener('click', (event) => {
-    if (event.target === fbDialog) closeFacebookSettings();
   });
 
   $('#btn-refresh-history').addEventListener('click', loadHistory);
@@ -963,7 +1077,7 @@ function bindEvents() {
     $('#card-progress').hidden = false;
     const details = $('#transcript-details');
     if (details) details.open = true;
-    $('#card-progress').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    $('#card-progress').scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
   });
 }
 
@@ -1001,7 +1115,7 @@ async function startAnalyze(event) {
   resetForNewJob();
 
   $('#card-progress').hidden = false;
-  $('#card-progress').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $('#card-progress').scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
   setProgress(3, 'Đang gửi yêu cầu...');
   setAnalyzeBusy(true);
 
@@ -1150,7 +1264,7 @@ function onJobDone(job) {
   $('#card-result').hidden = false;
   $('#card-facebook').hidden = false;
   updateFacebookUi();
-  $('#card-result').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $('#card-result').scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
   toast('Đã tạo bài viết. Kiểm tra và đăng.', 'ok');
   saveDraft(true);
 }
@@ -1798,7 +1912,7 @@ function openHistoryItem(entry) {
     $('#publish-result').hidden = true;
   }
   switchTab('content', true);
-  $('#card-result').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $('#card-result').scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
 }
 
 /* ---------- Settings ---------- */
@@ -1826,27 +1940,14 @@ function openSettings() {
   $('#settings-status').textContent = '';
 
   const dialog = $('#dialog-settings');
-  if (!dialog.open) dialog.showModal();
+  if (!dialog.open) {
+    dialog.showModal();
+    $('#set-gemini-key').focus({ preventScroll: true });
+  }
 }
 
 function closeSettings() {
   const dialog = $('#dialog-settings');
-  if (dialog.open) dialog.close();
-}
-
-function openFacebookSettings() {
-  renderFbSettings();
-  const box = $('#test-fb-result');
-  box.hidden = true;
-  box.textContent = '';
-  box.className = 'test-result';
-  $('#facebook-status').textContent = '';
-  const dialog = $('#dialog-facebook');
-  if (!dialog.open) dialog.showModal();
-}
-
-function closeFacebookSettings() {
-  const dialog = $('#dialog-facebook');
   if (dialog.open) dialog.close();
 }
 
@@ -1865,7 +1966,8 @@ async function saveFbHashtags() {
   }
 }
 
-async function saveFacebookSettings({ silent = false, close = false } = {}) {
+async function saveFacebookSettings({ silent = false } = {}) {
+  const button = $('#btn-fb-save');
   const payload = {
     apiVersion: $('#set-fb-version').value.trim(),
     clipCount: Number($('#set-fb-clip-count').value) || 5,
@@ -1874,15 +1976,23 @@ async function saveFacebookSettings({ silent = false, close = false } = {}) {
   const token = $('#set-fb-token').value.trim();
   if (token) payload.accessToken = token;
 
-  const response = await api('/facebook/config', { method: 'PUT', body: payload });
-  state.fbConfig = response.config;
-  $('#set-fb-token').value = '';
-  renderFbSettings();
-  updateFacebookUi();
-  $('#facebook-status').textContent = `Đã lưu lúc ${new Date().toLocaleTimeString('vi-VN')}`;
+  const status = $('#facebook-status');
+  if (button) button.disabled = true;
+  if (status) status.textContent = 'Đang lưu...';
 
-  if (close) closeFacebookSettings();
-  if (!silent) toast('Đã lưu cấu hình Facebook.', 'ok');
+  try {
+    const response = await api('/facebook/config', { method: 'PUT', body: payload });
+    state.fbConfig = response.config;
+    renderFbSettings();
+    updateFacebookUi();
+    if (status) status.textContent = `Đã lưu lúc ${new Date().toLocaleTimeString('vi-VN')}`;
+    if (!silent) toast('Đã lưu cấu hình Facebook.', 'ok');
+  } catch (err) {
+    if (status) status.textContent = err.message;
+    toast(err.message, 'bad');
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 function updateSettingsHints() {

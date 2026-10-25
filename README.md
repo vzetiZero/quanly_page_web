@@ -58,9 +58,9 @@ node server.js
 
 Mở nút **Cài đặt** trên giao diện cho AI/website. Key được che dạng `••••1234`; để trống ô key nếu muốn giữ key cũ.
 
-Cấu hình AI/website và Facebook được lưu cục bộ trong `data/config.json` và `data/facebook.json`. Hai file này **không** đưa lên GitHub, nên máy đang chạy không phải nhập lại key sau mỗi lần khởi động. Khi chuyển sang máy khác hoặc người dùng khác, chỉ cần mở **Cài đặt** / **Page Facebook** và nhập lại API key, token.
+Cấu hình AI/website và Facebook được lưu cục bộ trong `data/config.json` và `data/facebook.json`. Hai file này **không** đưa lên GitHub, nên máy đang chạy không phải nhập lại key sau mỗi lần khởi động. Khi chuyển sang máy khác hoặc người dùng khác, chỉ cần mở **Cài đặt** / tab **Facebook Page** và nhập lại API key, token.
 
-Cấu hình Facebook nằm trong menu riêng **Page Facebook** trên thanh đầu trang (hoặc nút **Cấu hình Page** trong thẻ Đăng Facebook Reels), không còn nằm trong hộp Cài đặt chung. Hashtag được nhập ngay trong thẻ tạo clip.
+Cấu hình Facebook nằm trong tab **Facebook Page** ở đầu trang (hoặc nút **Cấu hình Page** trong thẻ Đăng Facebook Reels sẽ mở thẳng tab này), không còn nằm trong hộp Cài đặt chung. Tab này hiển thị đầy đủ danh sách Page kèm ô tìm kiếm theo tên, ID và danh mục; tick chọn xong bấm **Lưu cấu hình Page**. Hashtag được nhập ngay trong thẻ tạo clip.
 
 ### 3.1 LLM (Vilao AI / Gemini)
 
@@ -112,7 +112,7 @@ Nút **Kiểm tra website** trả về tài khoản đang dùng (ví dụ `Admin
 | `FB_CLIP_COUNT` | `5` | Số clip mỗi video (1–10) |
 | `FB_MAX_SOURCE_SECONDS` | `7200` | Giới hạn độ dài video gốc (giây) |
 
-`data/config.json` và `data/facebook.json` (sinh ra khi bấm Lưu cài đặt) được ưu tiên hơn `.env`, và đã nằm trong `.gitignore`.
+`data/config.json` và `data/facebook.json` (sinh ra khi bấm Lưu cài đặt / Lưu cấu hình Page) được ưu tiên hơn `.env`, và đã nằm trong `.gitignore`.
 
 ### 3.4 Facebook Page / Reels
 
@@ -130,8 +130,8 @@ Cách lấy token:
 
 1. Tạo app tại [Meta for Developers](https://developers.facebook.com/apps/) (loại Business).
 2. Mở **Graph API Explorer**, chọn app, thêm 3 quyền trên và tạo **User access token**.
-3. Mở menu **Page Facebook** trên thanh đầu trang (hoặc **Cấu hình Page** trong thẻ Facebook), dán token và bấm **Kiểm tra token**.
-4. Bấm **Tải danh sách Page**, tick các Page muốn đăng, rồi **Lưu cài đặt**.
+3. Mở tab **Facebook Page** ở đầu trang (hoặc **Cấu hình Page** trong thẻ Facebook), dán token và bấm **Kiểm tra token**.
+4. Bấm **Tải danh sách Page**, dùng ô tìm kiếm hoặc **Chọn tất cả**, tick các Page muốn đăng, rồi **Lưu cấu hình Page**.
 
 Token ngắn hạn của Graph API Explorer hết hạn sau khoảng 1–2 giờ. Để chạy lâu dài, đổi sang long-lived token (khoảng 60 ngày) theo hướng dẫn **Access Tokens** của Graph API, hoặc dùng System User token nếu có Business Manager.
 
@@ -144,7 +144,7 @@ Cấu hình dùng chung cho mọi Page:
 | Hashtag gắn vào title | Nhập ngay trong thẻ **Đăng Facebook Reels**; hashtag nằm ở dòng đầu caption, mô tả ở dòng sau |
 | Page đã chọn | Mỗi Page nhận **1 clip ngẫu nhiên** trong số clip đã tạo |
 
-Độ dài clip do AI chọn trong khoảng **45–75 giây** (không cắt cứng đúng 60 giây), xuất **Reels dọc 9:16** với nền mờ. Số clip đổi trong menu **Page Facebook**; khoảng thời gian nằm trong `data/facebook.json` (`minSeconds`, `maxSeconds`, `vertical`).
+Độ dài clip do AI chọn trong khoảng **45–75 giây** (không cắt cứng đúng 60 giây), xuất **Reels dọc 9:16** với nền mờ. Số clip đổi trong tab **Facebook Page**; khoảng thời gian nằm trong `data/facebook.json` (`minSeconds`, `maxSeconds`, `vertical`).
 
 ## 4. Sử dụng
 
@@ -308,7 +308,7 @@ downloads/              File tạm của yt-dlp và clip
 
 **Bài mới chưa hiện ở Latest News** — cache AJAX của theme. Bấm **Kiểm tra trang chủ** trong khung đăng thành công; nếu báo "có trong trang chủ nhưng chưa hiện ở Latest News", xoá cache trong admin website hoặc chờ 1–4 giờ.
 
-**Facebook báo `Invalid OAuth access token` (code 190)** — token sai hoặc đã hết hạn. Tạo token mới trong Graph API Explorer, dán vào menu **Page Facebook**, bấm **Kiểm tra token** rồi **Tải danh sách Page**.
+**Facebook báo `Invalid OAuth access token` (code 190)** — token sai hoặc đã hết hạn. Tạo token mới trong Graph API Explorer, dán vào tab **Facebook Page**, bấm **Kiểm tra token** rồi **Tải danh sách Page**.
 
 **Facebook báo thiếu quyền** — token chưa có `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, hoặc tài khoản không có quyền đăng trên Page. Kiểm tra lại app và vai trò trên Page.
 
