@@ -168,7 +168,7 @@ function updateFacebookUi() {
     if (summary) {
       const tags = cfg.hashtags ? cfg.hashtags : 'không hashtag';
       summary.textContent =
-        `${selected} Page · ${cfg.clipCount} clip · ${cfg.minSeconds}–${cfg.maxSeconds}s · ${tags}`;
+        `${selected} Page · ${cfg.clipCount} clip tạo ra · mỗi Page nhận 1 clip ngẫu nhiên · ${cfg.minSeconds}–${cfg.maxSeconds}s · ${tags}`;
     }
     setPill('facebook', 'ok', `${selected} Page sẵn sàng`);
   }
@@ -542,7 +542,9 @@ function renderFbResults(result, running) {
     if (!related.length) {
       const pending = document.createElement('span');
       pending.className = 'muted small';
-      pending.textContent = running ? 'Đang chờ đăng...' : 'Chưa có Page nào đăng clip này.';
+      pending.textContent = running
+        ? 'Đang chờ chọn Page...'
+        : 'Clip không được chọn đăng lần này.';
       links.appendChild(pending);
     } else {
       for (const post of related) {

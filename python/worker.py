@@ -6,6 +6,7 @@ import copy
 import importlib.util
 import logging
 import os
+import random
 import re
 import shutil
 import tempfile
@@ -346,6 +347,21 @@ def _normalize_clips(
     return accepted
 
 
+def _assign_clips_to_pages(
+    clips: list[dict], files: list[str], pages: list[dict]
+) -> list[tuple[dict, str, dict]]:
+    """Give each Page one randomly picked clip; avoid repeats while possible."""
+
+    pool = list(zip(clips, files))
+    if not pool or not pages:
+        return []
+    random.shuffle(pool)
+    return [
+        (pool[index % len(pool)][0], pool[index % len(pool)][1], page)
+        for index, page in enumerate(pages)
+    ]
+
+
 def _run_facebook_job(job_id: str, payload: dict) -> None:
     workdir = tempfile.mkdtemp(prefix="fb-", dir=str(DOWNLOAD_DIR))
     options = {
@@ -527,64 +543,60 @@ def _run_facebook_job(job_id: str, payload: dict) -> None:
                 entry["file"] = path
             result_clips.append(entry)
 
-        total_uploads = len(files) * len(pages) if pages else 0
+        assignments = _assign_clips_to_pages(result_clips, files, pages)
+        total_uploads = len(assignments)
         completed_uploads = 0
         _update(
             job_id,
             clips=result_clips,
             stage="upload",
-            percent=76 if pages else 96,
+            percent=76 if assignments else 96,
             message=(
-                f"Đang đăng {len(files)} clip lên {len(pages)} Page..."
-                if pages
+                f"Đang đăng 1 clip ngẫu nhiên lên {len(pages)} Page..."
+                if assignments
                 else "Đã tạo clip. Chưa chọn Page nên không đăng."
             ),
         )
 
-        for clip_entry, path in zip(result_clips, files):
-            for page in pages:
-                _ensure_active(job_id)
-                page_name = page.get("name") or page.get("id")
-                _update(
-                    job_id,
-                    message=(
-                        f"Đang đăng clip {clip_entry['index']}/{len(files)} "
-                        f"lên {page_name}..."
+        for position, (clip_entry, path, page) in enumerate(assignments, 1):
+            _ensure_active(job_id)
+            page_name = page.get("name") or page.get("id")
+            _update(
+                job_id,
+                message=(
+                    f"Đang đăng clip {clip_entry['index']} lên {page_name} "
+                    f"({position}/{total_uploads})..."
+                ),
+            )
+            try:
+                posted = upload_reel(
+                    page,
+                    path,
+                    clip_entry["caption"],
+                    version=api_version,
+                    on_stage=lambda stage_text, name=page_name: _update(
+                        job_id, message=f"{stage_text} · {name}"
                     ),
+                    cancel=lambda: _is_cancelled(job_id),
                 )
-                try:
-                    posted = upload_reel(
-                        page,
-                        path,
-                        clip_entry["caption"],
-                        version=api_version,
-                        on_stage=lambda stage_text, name=page_name: _update(
-                            job_id, message=f"{stage_text} · {name}"
-                        ),
-                        cancel=lambda: _is_cancelled(job_id),
-                    )
-                    posted["clipIndex"] = clip_entry["index"]
-                    posted["clipTitle"] = clip_entry["title"]
-                except FacebookError as exc:
-                    posted = {
-                        "ok": False,
-                        "pageId": page.get("id"),
-                        "pageName": page_name,
-                        "clipIndex": clip_entry["index"],
-                        "clipTitle": clip_entry["title"],
-                        "error": str(exc),
-                    }
-                posts.append(posted)
-                completed_uploads += 1
-                _update(
-                    job_id,
-                    posts=list(posts),
-                    percent=(
-                        76 + int(completed_uploads / max(total_uploads, 1) * 24)
-                        if pages
-                        else 96
-                    ),
-                )
+                posted["clipIndex"] = clip_entry["index"]
+                posted["clipTitle"] = clip_entry["title"]
+            except FacebookError as exc:
+                posted = {
+                    "ok": False,
+                    "pageId": page.get("id"),
+                    "pageName": page_name,
+                    "clipIndex": clip_entry["index"],
+                    "clipTitle": clip_entry["title"],
+                    "error": str(exc),
+                }
+            posts.append(posted)
+            completed_uploads += 1
+            _update(
+                job_id,
+                posts=list(posts),
+                percent=76 + int(completed_uploads / max(total_uploads, 1) * 24),
+            )
 
         failed = [post for post in posts if not post.get("ok")]
         result = {

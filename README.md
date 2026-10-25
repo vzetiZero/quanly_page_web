@@ -142,7 +142,7 @@ Cấu hình dùng chung cho mọi Page:
 | Graph API version | Mặc định `v25.0` |
 | Số clip mỗi video | 1–10; AI có thể trả ít hơn nếu video ngắn |
 | Hashtag gắn vào title | Nhập ngay trong thẻ **Đăng Facebook Reels**; hashtag nằm ở dòng đầu caption, mô tả ở dòng sau |
-| Page đã chọn | Mỗi clip được đăng lên **tất cả** Page đã tick |
+| Page đã chọn | Mỗi Page nhận **1 clip ngẫu nhiên** trong số clip đã tạo |
 
 Độ dài clip do AI chọn trong khoảng **45–75 giây** (không cắt cứng đúng 60 giây), xuất **Reels dọc 9:16** với nền mờ. Số clip đổi trong menu **Page Facebook**; khoảng thời gian nằm trong `data/facebook.json` (`minSeconds`, `maxSeconds`, `vertical`).
 
@@ -175,12 +175,12 @@ Sau khi bài viết được tạo, thẻ **Đăng Facebook Reels** xuất hiệ
    `lấy metadata → transcript có timestamp → AI chọn highlight → tải video 720p → cắt clip dọc 9:16 → viết title/mô tả → đăng Reels`.
 4. Theo dõi thanh tiến trình và log từng bước. Clip được đăng **ngay khi cắt xong**, không có bước duyệt lại.
 5. Muốn dừng giữa chừng, bấm **HUỶ**. Nút này huỷ mọi tiến trình đang chạy (job bài viết và job Facebook), dừng tải video, kill ffmpeg và không đăng thêm clip nào.
-6. Kết quả hiển thị từng clip kèm link Reel của từng Page, hoặc lỗi riêng của Page đó. Nút **Copy caption** sao chép title + hashtag + mô tả.
+6. Kết quả hiển thị các clip đã tạo và link Reel của Page được gán clip đó, hoặc lỗi riêng của Page. Nút **Copy caption** sao chép title + hashtag + mô tả.
 7. Các lần đăng gần đây nằm trong **Lần đăng gần đây** (tối đa 30 mục, lưu ở `data/facebook-history.json`).
 
 Lưu ý:
 
-- Mỗi clip được đăng lên **tất cả Page đã tick**; 5 clip × 3 Page = 15 lần đăng.
+- Mỗi Page chỉ đăng **1 clip ngẫu nhiên** trong số clip đã tạo; 5 clip × 3 Page = 3 lần đăng. Clip được xáo trộn để các Page nhận clip khác nhau khi số clip đủ.
 - Nếu một Page lỗi, các Page còn lại vẫn tiếp tục; job chỉ báo lỗi hoàn toàn khi tất cả lần đăng đều thất bại.
 - Video gốc phải có phụ đề (hoặc bật Whisper) và dài hơn độ dài clip tối thiểu. Giới hạn mặc định 2 giờ/video.
 - File tạm được xoá sau khi job kết thúc. Đặt `keepFiles` khi gọi API nội bộ nếu cần giữ clip để kiểm tra.
