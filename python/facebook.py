@@ -13,6 +13,7 @@ REQUIRED_PERMISSIONS = [
     "pages_show_list",
     "pages_read_engagement",
     "pages_manage_posts",
+    "pages_manage_engagement",
 ]
 
 
@@ -62,7 +63,8 @@ def _raise_for_graph(response: httpx.Response, action: str) -> dict:
     if response.status_code in (401, 403):
         raise FacebookError(
             f"{action}: token bị từ chối hoặc thiếu quyền (HTTP {response.status_code}). "
-            f"Cần pages_show_list, pages_read_engagement, pages_manage_posts. Chi tiết: {detail}"
+            "Cần pages_show_list, pages_read_engagement, pages_manage_posts, "
+            f"pages_manage_engagement. Chi tiết: {detail}"
         )
     if response.status_code == 429:
         raise FacebookError(f"{action}: Facebook giới hạn tần suất. Thử lại sau. Chi tiết: {detail}")
@@ -196,7 +198,7 @@ def fetch_pages(access_token: str, version: str | None = None) -> list[dict]:
     return sorted(pages.values(), key=lambda item: item["name"].lower())
 
 
-def _normalize_hashtags(value: str) -> str:
+def normalize_hashtags(value: str) -> str:
     tokens: list[str] = []
     for raw in (value or "").replace("\n", " ").split():
         token = raw.strip().lstrip("#")
@@ -207,7 +209,7 @@ def _normalize_hashtags(value: str) -> str:
 
 
 def build_caption(title: str, description: str, hashtags: str = "") -> str:
-    tags = _normalize_hashtags(hashtags)
+    tags = normalize_hashtags(hashtags)
     headline = (title or "").strip()
     if tags:
         headline = f"{headline} {tags}".strip()
@@ -346,3 +348,39 @@ def upload_reel(
             "permalinkUrl": base_permalink,
             "status": status_text or "unknown",
         }
+
+
+def post_comment(
+    page: dict,
+    video_id: str,
+    message: str,
+    *,
+    version: str | None = None,
+) -> dict:
+    """Add a comment under a published Reel using the Page token."""
+
+    page_id = str(page.get("id") or "")
+    token = (page.get("accessToken") or page.get("access_token") or "").strip()
+    target = str(video_id or "").strip()
+    text = (message or "").strip()
+    if not page_id or not token:
+        raise FacebookError("Thiếu Page ID hoặc Page Access Token.")
+    if not target:
+        raise FacebookError("Thiếu video ID để bình luận.")
+    if not text:
+        raise FacebookError("Nội dung bình luận rỗng.")
+
+    try:
+        with httpx.Client(timeout=60) as client:
+            response = client.post(
+                f"{_base(version)}/{target}/comments",
+                data={"access_token": token, "message": text},
+            )
+            payload = _raise_for_graph(response, "Bình luận Reel")
+    except httpx.HTTPError as exc:
+        raise FacebookError(f"Bình luận Reel: không kết nối được Facebook ({exc}).") from exc
+    return {
+        "ok": True,
+        "commentId": str(payload.get("id") or ""),
+        "message": text,
+    }

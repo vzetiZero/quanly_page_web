@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
 import logging
 import os
 import random
@@ -39,6 +40,8 @@ from facebook import (  # noqa: E402
     FacebookError,
     build_caption,
     fetch_pages,
+    normalize_hashtags,
+    post_comment,
     upload_reel,
     validate_token,
 )
@@ -59,9 +62,15 @@ logger = logging.getLogger("news247us-worker")
 DOWNLOAD_DIR = ROOT_DIR / "downloads"
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-WHISPER_ENABLED = os.getenv("WHISPER_ENABLED", "0").strip().lower() in ("1", "true", "yes")
+WHISPER_ENABLED = os.getenv("WHISPER_ENABLED", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small").strip() or "small"
 MAX_FB_SOURCE_SECONDS = int(os.getenv("FB_MAX_SOURCE_SECONDS", "7200") or 7200)
+ARTICLE_COMMENT_TEASER = "There’s more to this story than it seems 👇"
 
 _cookies_env = os.getenv("YTDLP_COOKIES_FILE", "").strip()
 COOKIES_FILE = str((ROOT_DIR / _cookies_env).resolve()) if _cookies_env else None
@@ -72,9 +81,38 @@ if COOKIES_FILE and not os.path.isfile(COOKIES_FILE):
 JOBS: dict[str, dict] = {}
 BATCHES: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
-JOB_WORKERS = max(1, min(8, int(os.getenv("JOB_WORKERS", "4") or 4)))
+try:
+    _saved_app_config = json.loads((ROOT_DIR / "data" / "config.json").read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    _saved_app_config = {}
+JOB_WORKERS = max(1, min(8, int(_saved_app_config.get("jobWorkers") or os.getenv("JOB_WORKERS", "4") or 4)))
+JOB_SLOTS = threading.Condition()
+ACTIVE_JOB_SLOTS = 0
 MAX_BATCH_URLS = max(1, min(100, int(os.getenv("BATCH_MAX_URLS", "40") or 40)))
-EXECUTOR = ThreadPoolExecutor(max_workers=JOB_WORKERS, thread_name_prefix="job")
+EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="job")
+
+
+def _run_with_job_slot(function, *args) -> None:
+    global ACTIVE_JOB_SLOTS
+    with JOB_SLOTS:
+        while ACTIVE_JOB_SLOTS >= JOB_WORKERS:
+            JOB_SLOTS.wait()
+        ACTIVE_JOB_SLOTS += 1
+    try:
+        function(*args)
+    finally:
+        with JOB_SLOTS:
+            ACTIVE_JOB_SLOTS -= 1
+            JOB_SLOTS.notify_all()
+
+
+def _set_job_workers(value: int) -> int:
+    global JOB_WORKERS
+    workers = max(1, min(8, int(value)))
+    with JOB_SLOTS:
+        JOB_WORKERS = workers
+        JOB_SLOTS.notify_all()
+    return workers
 
 # 0 = thử lại không giới hạn cho tới khi AI trả về bài hợp lệ.
 AI_MAX_ATTEMPTS = max(0, int(os.getenv("AI_MAX_ATTEMPTS", "0") or 0))
@@ -138,6 +176,7 @@ class FacebookJobRequest(BaseModel):
     language: str = "en"
     keepFiles: bool = False
     apiVersion: str = "v25.0"
+    articleUrl: str = ""
     ai: AIConfig
 
 
@@ -314,7 +353,7 @@ def _create_article_job(
             "result": None,
             "error": None,
         }
-    EXECUTOR.submit(_run_job, job_id, payload)
+    EXECUTOR.submit(_run_with_job_slot, _run_job, job_id, payload)
     return job_id
 
 
@@ -343,7 +382,7 @@ def _run_job(job_id: str, payload: dict) -> None:
             metadata=clean_metadata,
             stage="transcript",
             percent=15,
-            message="Đang tải phụ đề / transcript...",
+            message="Đang lấy phụ đề; nếu video không có phụ đề sẽ tự phiên âm bằng Whisper...",
         )
 
         transcript = get_transcript(
@@ -413,6 +452,19 @@ def _strip_hashtags(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"#\w+", "", text or "")).strip()
 
 
+def _clip_hashtags(value) -> str:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return ""
+    return normalize_hashtags(" ".join(str(item) for item in value))
+
+
+def _clip_caption(clip: dict, extra_hashtags: str = "") -> str:
+    combined = f"{clip.get('hashtags') or ''} {extra_hashtags or ''}".strip()
+    return build_caption(clip["title"], clip["description"], combined)
+
+
 def _normalize_clips(
     raw: dict,
     duration: float,
@@ -453,6 +505,7 @@ def _normalize_clips(
                 "end": round(end, 2),
                 "title": title,
                 "description": description,
+                "hashtags": _clip_hashtags(item.get("hashtags")),
                 "reason": str(item.get("reason") or "").strip()[:300],
             }
         )
@@ -499,6 +552,10 @@ def _run_facebook_job(job_id: str, payload: dict) -> None:
     }
     pages = payload.get("pages") or []
     hashtags = payload.get("hashtags") or ""
+    article_url = (payload.get("articleUrl") or "").strip()
+    comment_text = (
+        f"{ARTICLE_COMMENT_TEASER}\n{article_url}" if article_url else ""
+    )
     api_version = payload.get("apiVersion") or "v25.0"
     posts: list[dict] = []
 
@@ -533,7 +590,7 @@ def _run_facebook_job(job_id: str, payload: dict) -> None:
             metadata=clean_metadata,
             stage="transcript",
             percent=10,
-            message="Đang lấy transcript kèm thời gian...",
+            message="Đang lấy transcript kèm thời gian; nếu thiếu phụ đề sẽ tự phiên âm bằng Whisper...",
         )
         transcript = get_transcript(
             payload["url"],
@@ -599,10 +656,9 @@ def _run_facebook_job(job_id: str, payload: dict) -> None:
                     "duration": round(clip["end"] - clip["start"], 1),
                     "title": clip["title"],
                     "description": clip["description"],
+                    "hashtags": clip.get("hashtags") or "",
                     "reason": clip.get("reason", ""),
-                    "caption": build_caption(
-                        clip["title"], clip["description"], hashtags
-                    ),
+                    "caption": _clip_caption(clip, hashtags),
                 }
                 for index, clip in enumerate(clips)
             ],
@@ -662,12 +718,13 @@ def _run_facebook_job(job_id: str, payload: dict) -> None:
                 "duration": round(clip["end"] - clip["start"], 1),
                 "title": clip["title"],
                 "description": clip["description"],
+                "hashtags": clip.get("hashtags") or "",
                 "reason": clip.get("reason", ""),
-                "caption": build_caption(clip["title"], clip["description"], hashtags),
+                "caption": _clip_caption(clip, hashtags),
                 "fileName": os.path.basename(path),
             }
             if payload.get("keepFiles"):
-                entry["file"] = path
+                entry["fileUrl"] = "/downloads/" + Path(path).relative_to(DOWNLOAD_DIR).as_posix()
             result_clips.append(entry)
 
         assignments = _assign_clips_to_pages(result_clips, files, pages)
@@ -708,6 +765,18 @@ def _run_facebook_job(job_id: str, payload: dict) -> None:
                 )
                 posted["clipIndex"] = clip_entry["index"]
                 posted["clipTitle"] = clip_entry["title"]
+                if comment_text:
+                    _ensure_active(job_id)
+                    _update(job_id, message=f"Đang comment link bài viết · {page_name}")
+                    try:
+                        posted["comment"] = post_comment(
+                            page,
+                            posted.get("videoId") or "",
+                            comment_text,
+                            version=api_version,
+                        )
+                    except Exception as exc:  # noqa: BLE001 - comment must not fail a posted Reel
+                        posted["commentError"] = str(exc)
             except FacebookError as exc:
                 posted = {
                     "ok": False,
@@ -726,17 +795,22 @@ def _run_facebook_job(job_id: str, payload: dict) -> None:
             )
 
         failed = [post for post in posts if not post.get("ok")]
+        comment_failed = [post for post in posts if post.get("commentError")]
+        commented = [post for post in posts if post.get("comment")]
         result = {
             "metadata": clean_metadata,
             "clips": result_clips,
             "posts": posts,
             "ai": ai_meta,
+            "articleUrl": article_url,
             "pages": [
                 {"id": page.get("id"), "name": page.get("name") or page.get("id")}
                 for page in pages
             ],
             "postedCount": len(posts) - len(failed),
             "failedCount": len(failed),
+            "commentedCount": len(commented),
+            "commentFailedCount": len(comment_failed),
         }
 
         if posts and len(failed) == len(posts):
@@ -763,6 +837,17 @@ def _run_facebook_job(job_id: str, payload: dict) -> None:
         else:
             message = f"Đã tạo {len(result_clips)} clip (chưa chọn Page)."
             warnings = []
+
+        if commented:
+            message += f" Đã comment link bài viết dưới {len(commented)} Reel."
+        elif not article_url and posts:
+            warnings.append(
+                "Chưa có link bài viết nên Reel không có comment dẫn về bài."
+            )
+        warnings.extend(
+            f"{post['pageName']}: comment lỗi: {post.get('commentError')}"
+            for post in comment_failed
+        )
 
         _update(
             job_id,
@@ -801,6 +886,14 @@ def _run_facebook_job(job_id: str, payload: dict) -> None:
             shutil.rmtree(workdir, ignore_errors=True)
 
 
+@app.put("/settings/concurrency")
+def update_concurrency(payload: dict) -> dict:
+    value = payload.get("workers")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > 8:
+        raise HTTPException(status_code=400, detail="Số luồng phải là số nguyên từ 1 đến 8.")
+    return {"ok": True, "concurrency": _set_job_workers(value)}
+
+
 @app.get("/health")
 def health() -> dict:
     try:
@@ -821,6 +914,7 @@ def health() -> dict:
         "ffmpeg": ffmpeg_ok,
         "whisper": importlib.util.find_spec("faster_whisper") is not None,
         "whisperEnabled": WHISPER_ENABLED,
+        "concurrency": JOB_WORKERS,
     }
 
 
@@ -1059,7 +1153,7 @@ def facebook_job(request: FacebookJobRequest) -> dict:
 
     payload = request.model_dump()
     payload["url"] = url
-    EXECUTOR.submit(_run_facebook_job, job_id, payload)
+    EXECUTOR.submit(_run_with_job_slot, _run_facebook_job, job_id, payload)
     return {"jobId": job_id}
 
 

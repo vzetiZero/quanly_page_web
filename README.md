@@ -21,7 +21,7 @@ Luồng Facebook Reels: `AI chọn highlight → tải video → cắt clip dọ
 | yt-dlp | Tự cài trong `setup.bat` |
 | ffmpeg | `imageio-ffmpeg` (cài qua `requirements.txt`) |
 
-`ffmpeg` bắt buộc cho tính năng cắt clip Facebook Reels; `imageio-ffmpeg` tự tải binary nên không cần cài thủ công. Chỉ cần thêm `faster-whisper` khi bật Whisper cho video không có phụ đề.
+`ffmpeg` bắt buộc cho tính năng cắt clip Facebook Reels; `imageio-ffmpeg` tự tải binary nên không cần cài thủ công. `faster-whisper` được cài sẵn để tự phiên âm video không có phụ đề.
 
 ## 2. Cài đặt và chạy
 
@@ -103,7 +103,7 @@ Nút **Kiểm tra website** trả về tài khoản đang dùng (ví dụ `Admin
 | `PYTHON_PORT` | `8000` | Cổng worker nội bộ |
 | `AUTO_START_PYTHON` | `1` | Tự chạy worker từ `.venv` |
 | `OPEN_BROWSER` | `1` | Tự mở trình duyệt |
-| `WHISPER_ENABLED` | `0` | Bật fallback Whisper |
+| `WHISPER_ENABLED` | `1` | Tự phiên âm khi video không có phụ đề; đặt `0` để tắt |
 | `WHISPER_MODEL` | `small` | `tiny/base/small/medium/large-v3` |
 | `YTDLP_COOKIES_FILE` | trống | Đường dẫn `cookies.txt` khi YouTube chặn IP |
 | `FB_ACCESS_TOKEN` | trống | Token mặc định, thường dán trong giao diện thay vì `.env` |
@@ -125,6 +125,7 @@ Quyền bắt buộc:
 | `pages_show_list` | Liệt kê Page |
 | `pages_read_engagement` | Đọc thông tin Page |
 | `pages_manage_posts` | Đăng Reels lên Page |
+| `pages_manage_engagement` | Comment link bài viết dưới Reel |
 
 Cách lấy token:
 
@@ -141,10 +142,11 @@ Cấu hình dùng chung cho mọi Page:
 |---|---|
 | Graph API version | Mặc định `v25.0` |
 | Số clip mỗi video | 1–10; AI có thể trả ít hơn nếu video ngắn |
-| Hashtag gắn vào title | Nhập ngay trong thẻ **Đăng Facebook Reels**; hashtag nằm ở dòng đầu caption, mô tả ở dòng sau |
+| Độ dài clip | Đặt khoảng tối thiểu/tối đa (giây) trong tab **Facebook Page** |
+| Số luồng | Đặt từ 1–8 trong tab **Facebook Page**; thay đổi áp dụng ngay khi lưu |
 | Page đã chọn | Mỗi Page nhận **1 clip ngẫu nhiên** trong số clip đã tạo |
 
-Độ dài clip do AI chọn trong khoảng **45–75 giây** (không cắt cứng đúng 60 giây), xuất **Reels dọc 9:16** với nền mờ. Số clip đổi trong tab **Facebook Page**; khoảng thời gian nằm trong `data/facebook.json` (`minSeconds`, `maxSeconds`, `vertical`).
+Độ dài mặc định **45–75 giây** (có thể chỉnh trong giao diện), xuất **Reels dọc 9:16** với nền mờ. Hashtag do AI chọn cho từng clip.
 
 ## 4. Sử dụng
 
@@ -153,7 +155,7 @@ Cấu hình dùng chung cho mọi Page:
 3. Bấm **Phân tích & viết bài** và theo dõi 3 bước: lấy phụ đề → Gemini viết → hoàn tất.
 4. Kiểm tra **Nội dung HTML** / **Xem trước**, sửa tiêu đề, SEO, tags, danh mục.
 5. Chọn ảnh đại diện: tải ảnh mới (lên R2) hoặc dùng thumbnail YouTube.
-6. Bấm **Đăng lên news247us**. Link bài viết hiện ra sau khi đăng thành công, kèm trạng thái hiển thị trên trang chủ / Latest News.
+6. Bấm **Đăng lên news247us**. Link bài viết hiện ra sau khi đăng thành công, kèm trạng thái có trên trang chủ.
 
 Nếu bước AI lỗi, transcript vẫn được giữ lại và có nút **Thử lại** — không phải tải video lại từ đầu.
 
@@ -161,8 +163,9 @@ Nếu bước AI lỗi, transcript vẫn được giữ lại và có nút **Th�
 
 Dán danh sách link vào ô **Danh sách link YouTube** (mỗi dòng một link, tối đa 40) rồi bấm **Phân tích hàng loạt**.
 
-- Chạy song song 4 video mặc định (`JOB_WORKERS` trong `.env`, 1–8).
+- Số luồng mặc định là 4, chỉnh từ 1–8 ngay trong cấu hình Facebook Page; thay đổi được áp dụng khi lưu.
 - Mỗi video có một card riêng: tiến độ, số lần AI thử lại, **Mở bài**, **Thử lại riêng**, **Huỷ**.
+- Khi có bài xong, nút **Đăng hàng loạt** đăng lần lượt tất cả bài chưa đăng lên website, lưu lịch sử và gắn link bài vào từng card. Bài đã đăng trước đó (cùng link video) được bỏ qua để tránh tạo bài trùng.
 - AI tự thử lại khi lỗi mạng, timeout hoặc trả JSON không hợp lệ cho tới khi có bài đạt yêu cầu. Lỗi cấu hình (sai API key, sai model) dừng ngay để tránh chờ vô ích.
 - Tag do AI chọn được lọc theo đúng danh sách tag đang có trên website; tag không tồn tại bị loại bỏ.
 
@@ -176,24 +179,27 @@ Bài đã đăng được lưu trong **Lịch sử** kèm `post_id` của websit
 
 ### 4.3 Đăng Facebook Reels
 
-Sau khi bài viết được tạo, thẻ **Đăng Facebook Reels** xuất hiện ngay dưới bài viết:
+Có thể dán nhiều URL YouTube (mỗi dòng một URL) vào danh sách nguồn. Ứng dụng chạy từng nguồn thành một job và dùng số luồng `JOB_WORKERS`; mỗi nguồn tự tìm link bài đã đăng theo YouTube ID trong lịch sử. Có thể ghi `URL video | URL bài viết` để ghi đè link tự ghép. Mỗi nhóm kết quả hiển thị clip và trạng thái comment riêng cho nguồn đó.
 
-1. Kiểm tra dòng cấu hình: số Page, số clip, độ dài, hashtag.
-2. Nhập **Hashtag gắn vào title** ngay trong thẻ (ví dụ `#news #breaking`). Giá trị được lưu tự động và áp dụng cho các clip của job hiện tại.
-3. Bấm **Tạo clip & đăng Facebook**. Ứng dụng tự chạy:
-   `lấy metadata → transcript có timestamp → AI chọn highlight → tải video 720p → cắt clip dọc 9:16 → viết title/mô tả → đăng Reels`.
-4. Theo dõi thanh tiến trình và log từng bước. Clip được đăng **ngay khi cắt xong**, không có bước duyệt lại.
-5. Muốn dừng giữa chừng, bấm **HUỶ**. Nút này huỷ mọi tiến trình đang chạy (job bài viết và job Facebook), dừng tải video, kill ffmpeg và không đăng thêm clip nào.
-6. Kết quả hiển thị các clip đã tạo và link Reel của Page được gán clip đó, hoặc lỗi riêng của Page. Nút **Copy caption** sao chép title + hashtag + mô tả.
+Danh sách nguồn nằm trong tab **Facebook Page**. Nếu để trống, ứng dụng lấy danh sách URL YouTube ở tab **Bài viết**. Link comment được tự ghép theo YouTube ID từ lịch sử bài đã đăng; nguồn chưa có bài khớp vẫn được xử lý nhưng Reel sẽ không có comment link. Có thể chỉ định thủ công bằng định dạng `URL video | URL bài viết`.
+
+1. Kiểm tra số Page, số clip mỗi nguồn, khoảng độ dài clip và số luồng.
+2. Xem trước URL nguồn và link bài viết được ghép cho từng dòng.
+3. Bấm **Tạo clip & đăng Facebook**. Các nguồn chạy song song theo giới hạn luồng đã cấu hình. Mỗi nguồn tự chạy:
+   `lấy metadata → transcript có timestamp → AI chọn highlight → tải video 720p → cắt clip dọc 9:16 → viết title/mô tả/hashtag → đăng Reels → comment link bài viết`.
+4. Theo dõi tiến trình và log của từng URL. Reel được đăng ngay khi clip cắt xong.
+5. Bấm **HUỶ** để gửi yêu cầu huỷ các job đang chạy.
+6. Kết quả được nhóm theo URL nguồn, gồm clip, link Reel và trạng thái comment. **Copy caption** sao chép title + hashtag + mô tả.
 7. Các lần đăng gần đây nằm trong **Lần đăng gần đây** (tối đa 30 mục, lưu ở `data/facebook-history.json`).
 
 Lưu ý:
 
 - Mỗi Page chỉ đăng **1 clip ngẫu nhiên** trong số clip đã tạo; 5 clip × 3 Page = 3 lần đăng. Clip được xáo trộn để các Page nhận clip khác nhau khi số clip đủ.
 - Nếu số Page nhiều hơn số clip, clip được dùng lại cho Page dư; **mọi Page vẫn đăng đúng 1 clip** kèm title, mô tả, hashtag đầy đủ.
+- Sau khi Reel đăng xong, ứng dụng comment `There’s more to this story than it seems 👇` kèm link bài viết. Comment lỗi không làm hỏng Reel; lỗi hiện trong kết quả và cảnh báo của job.
 - Nếu một Page lỗi, các Page còn lại vẫn tiếp tục; job chỉ báo lỗi hoàn toàn khi tất cả lần đăng đều thất bại.
-- Video gốc phải có phụ đề (hoặc bật Whisper) và dài hơn độ dài clip tối thiểu. Giới hạn mặc định 2 giờ/video.
-- File tạm được xoá sau khi job kết thúc. Đặt `keepFiles` khi gọi API nội bộ nếu cần giữ clip để kiểm tra.
+- Video không có phụ đề được tự phiên âm bằng `faster-whisper` (`WHISPER_ENABLED=1`), không cần thao tác thêm. Video phải dài hơn độ dài clip tối thiểu; giới hạn mặc định 2 giờ/video.
+- Clip đã cắt được giữ trong `downloads/fb-<id>/clips/` và có nút **Mở video** ở từng thẻ kết quả. File nguồn và dữ liệu tạm khác được dọn sau khi job kết thúc.
 - Facebook có thể cần thời gian xử lý video sau khi `finish`; ứng dụng chờ tối đa 4 phút cho mỗi Reels trước khi báo lỗi.
 
 ## 5. Những gì API website nhận và không nhận
@@ -231,17 +237,16 @@ Vì không có endpoint danh sách, ứng dụng quản lý các bài do chính 
 
 Lưu ý: website có cache Cloudflare theo đường dẫn (khoảng 4 giờ). Sau khi sửa, trang public có thể còn nội dung cũ dù API đã cập nhật; đổi permalink hoặc chờ cache hết hạn. Kiểm tra bài mới nên dùng permalink mới.
 
-### Vì sao bài mới chưa hiện ở Latest News
+### Kiểm tra sau khi đăng
 
-Trang chủ render bài mới trong HTML, nhưng theme sau đó gọi `/ajax/theme/lasted-new` và thay danh sách Latest News bằng dữ liệu từ cache phía server. Cache này có thể trả danh sách cũ trong khi HTML trang chủ đã có bài mới.
+Trang chủ render bài mới trong HTML, nhưng theme sau đó gọi `/ajax/theme/lasted-new` và thay danh sách Latest News bằng dữ liệu từ cache phía server. Ứng dụng chỉ kiểm tra bài đã có trong trang chủ hay chưa và không hiển thị cảnh báo về cache Latest News.
 
-Sau khi đăng, ứng dụng tự kiểm tra và hiển thị một trong ba trạng thái:
+Sau khi đăng, ứng dụng tự kiểm tra và hiển thị một trong hai trạng thái:
 
-- **Đã hiển thị trong Latest News** — không cần làm gì.
-- **Có trong trang chủ nhưng chưa hiện ở Latest News** — cache Latest News còn cũ. Vào **Quản trị website → xoá cache**, hoặc chờ khoảng 1–4 giờ rồi bấm **Kiểm tra trang chủ**.
+- **Bài đã có trên trang chủ** — không cần làm gì.
 - **Chưa thấy bài trên trang chủ** — mở link bài để kiểm tra; có thể bài chưa được duyệt hoặc trang chủ đang cache.
 
-Nút **Kiểm tra trang chủ** gọi `GET /api/app/visibility?slug=<permalink>&id=<postId>`, đối chiếu cả HTML trang chủ và AJAX Latest News.
+Nút **Kiểm tra trang chủ** gọi `GET /api/app/visibility?slug=<permalink>&id=<postId>`, đối chiếu HTML trang chủ và AJAX Latest News.
 
 ## 6. Cấu trúc dự án
 
@@ -290,6 +295,7 @@ downloads/              File tạm của yt-dlp và clip
 | POST | `/api/app/facebook/test` | Kiểm tra token và quyền |
 | POST | `/api/app/facebook/pages` | Tải danh sách Page, lưu token |
 | POST | `/api/app/facebook/jobs` | Tạo job cắt clip + đăng Reels |
+| POST | `/api/app/facebook/batches` | Tạo nhiều job Facebook; tự ghép link bài viết theo YouTube ID |
 | GET | `/api/app/facebook/jobs/:id` | Tiến trình, clip, lỗi từng Page |
 | GET | `/api/app/facebook/history` | Lịch sử đăng Reels |
 
@@ -305,21 +311,23 @@ downloads/              File tạm của yt-dlp và clip
 
 **`Sign in to confirm you're not a bot`** — YouTube chặn IP. Xuất `cookies.txt` từ trình duyệt, đặt đường dẫn vào `YTDLP_COOKIES_FILE` trong `.env`.
 
-**Video không có phụ đề** — bật `WHISPER_ENABLED=1`, cài thêm:
+**Video không có phụ đề** — ứng dụng tự phiên âm bằng `faster-whisper` (mặc định `WHISPER_ENABLED=1`). Nếu log báo thiếu thư viện, cài lại:
 
 ```bat
-.venv\Scripts\python.exe -m pip install faster-whisper
+.venv\Scripts\python.exe -m pip install -r python\requirements.txt
 ```
+
+Nếu máy yếu và muốn tắt fallback, đặt `WHISPER_ENABLED=0` (khi đó video không có phụ đề sẽ báo lỗi).
 
 **`API key not valid`** — key `sk-...` đang gọi nhầm endpoint Google; xem mục 3.1.
 
 **Bài đăng không thấy thay đổi** — cache Cloudflare ~4 giờ; dùng permalink mới hoặc chờ cache hết hạn.
 
-**Bài mới chưa hiện ở Latest News** — cache AJAX của theme. Bấm **Kiểm tra trang chủ** trong khung đăng thành công; nếu báo "có trong trang chủ nhưng chưa hiện ở Latest News", xoá cache trong admin website hoặc chờ 1–4 giờ.
+**Bài mới chưa hiện ở Latest News** — cache AJAX của theme có thể trả danh sách cũ 1–4 giờ. Ứng dụng không cảnh báo trường hợp này; bài vẫn có trên trang chủ và truy cập được bằng link.
 
 **Facebook báo `Invalid OAuth access token` (code 190)** — token sai hoặc đã hết hạn. Tạo token mới trong Graph API Explorer, dán vào tab **Facebook Page**, bấm **Kiểm tra token** rồi **Tải danh sách Page**.
 
-**Facebook báo thiếu quyền** — token chưa có `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, hoặc tài khoản không có quyền đăng trên Page. Kiểm tra lại app và vai trò trên Page.
+**Facebook báo thiếu quyền** — token chưa có `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `pages_manage_engagement` (cần cho comment link bài viết), hoặc tài khoản không có quyền đăng trên Page. Kiểm tra lại app và vai trò trên Page.
 
 **Không tải được Page** — `/me/accounts` không trả Page. Ứng dụng tự thử qua Business Manager (`/me/businesses` → `owned_pages`/`client_pages`); nếu vẫn trống, thêm tài khoản vào Page hoặc cấp quyền trong Business Manager.
 
@@ -327,7 +335,7 @@ downloads/              File tạm của yt-dlp và clip
 
 **Video quá dài / không đủ ngắn để cắt clip** — giới hạn mặc định 2 giờ, video phải dài hơn độ dài clip tối thiểu (45 giây). Đổi `FB_MAX_SOURCE_SECONDS` hoặc dùng video ngắn hơn.
 
-**Job Facebook dừng ở "AI chọn highlight"** — AI không trả JSON hợp lệ hoặc video không có timestamp. Thử lại, giảm số clip, hoặc bật Whisper nếu video không có phụ đề.
+**Job Facebook dừng ở "AI chọn highlight"** — AI không trả JSON hợp lệ hoặc transcript không có timestamp. Thử lại, giảm số clip; video không có phụ đề sẽ tự chuyển sang Whisper nên không cần bật tay.
 
 ## 9. Hướng phát triển tiếp
 

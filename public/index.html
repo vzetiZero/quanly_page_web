@@ -100,7 +100,7 @@
             <label class="field">
               <span class="label">Danh sách link YouTube (mỗi dòng một link)</span>
               <textarea id="input-urls" rows="4" placeholder="https://www.youtube.com/watch?v=...&#10;https://youtu.be/..." spellcheck="false"></textarea>
-              <span class="hint">Chạy song song 4 video. Nếu AI lỗi hoặc chưa trả JSON, hệ thống tự thử lại cho tới khi có bài hợp lệ.</span>
+              <span class="hint">Số luồng có thể chỉnh trong cấu hình Facebook Page (1–8). Nếu AI lỗi hoặc chưa trả JSON hợp lệ, hệ thống tự thử lại.</span>
             </label>
             <div class="form-actions">
               <button class="btn btn-primary" id="btn-batch" type="button">Phân tích hàng loạt</button>
@@ -131,6 +131,11 @@
         </div>
 
         <div class="batch-grid" id="batch-grid"></div>
+
+        <div class="row-actions batch-publish-row">
+          <button class="btn btn-primary" id="btn-batch-publish" type="button" disabled>Đăng hàng loạt</button>
+          <span class="muted small" id="batch-publish-status"></span>
+        </div>
       </div>
 
       <div class="card" id="card-progress" hidden>
@@ -304,11 +309,12 @@
         </div>
 
         <div class="fb-config-line" id="fb-summary">Chưa cấu hình Facebook.</div>
-        <label class="field fb-hashtag-field">
-          <span class="label">Hashtag gắn vào title</span>
-          <input id="fb-hashtags" placeholder="#news #breaking" maxlength="200" spellcheck="false">
-          <span class="hint">Gắn vào cuối tiêu đề mỗi clip. Được lưu lại cho lần sau.</span>
+        <label class="field">
+          <span class="label">Danh sách URL nguồn và link bài viết (mỗi dòng một video)</span>
+          <textarea id="fb-source-list" rows="4" placeholder="https://www.youtube.com/watch?v=...&#10;https://www.youtube.com/watch?v=... | https://news247us.../bai-viet"></textarea>
+          <span class="hint">Dán URL video tại đây, hoặc dùng danh sách ở tab Bài viết. Ứng dụng tự ghép bài đã đăng theo YouTube ID. Có thể thêm “| link bài viết” để chỉ định thủ công. Nguồn không có bài đã đăng vẫn tạo và đăng Reel, nhưng không tự comment link.</span>
         </label>
+        <div id="fb-source-mapping" class="fb-source-mapping" aria-live="polite"></div>
         <div class="row-actions">
           <button class="btn btn-ghost btn-mini" id="btn-fb-settings" type="button">Cấu hình Page</button>
           <button class="btn btn-primary" id="btn-fb-run" type="button">Tạo clip &amp; đăng Facebook</button>
@@ -368,7 +374,7 @@
           <div class="step-badge fb-badge">FB</div>
           <div class="grow">
             <h2>Kết nối Facebook Page</h2>
-            <p>Dùng user access token có quyền <code>pages_show_list</code>, <code>pages_read_engagement</code>, <code>pages_manage_posts</code>. App tự đổi sang Page token qua <code>/me/accounts</code>.</p>
+            <p>Dùng user access token có quyền <code>pages_show_list</code>, <code>pages_read_engagement</code>, <code>pages_manage_posts</code>, <code>pages_manage_engagement</code>. App tự đổi sang Page token qua <code>/me/accounts</code>.</p>
           </div>
           <span class="badge" id="fb-config-badge">Chưa cấu hình</span>
         </div>
@@ -387,6 +393,23 @@
           <label class="field">
             <span class="label">Số clip mỗi video</span>
             <input id="set-fb-clip-count" type="number" min="1" max="10" value="5">
+          </label>
+        </div>
+        <div class="grid-2">
+          <label class="field">
+            <span class="label">Độ dài tối thiểu (giây)</span>
+            <input id="set-fb-min-seconds" type="number" min="20" max="120" step="1">
+          </label>
+          <label class="field">
+            <span class="label">Độ dài tối đa (giây)</span>
+            <input id="set-fb-max-seconds" type="number" min="30" max="180" step="1">
+          </label>
+        </div>
+        <div class="grid-2">
+          <label class="field">
+            <span class="label">Số luồng chạy song song (1–8)</span>
+            <input id="set-job-workers" type="number" min="1" max="8" step="1" value="4">
+            <span class="hint">Áp dụng cho phân tích video và tạo clip Facebook; thay đổi có hiệu lực ngay khi lưu.</span>
           </label>
         </div>
 

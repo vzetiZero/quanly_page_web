@@ -29,6 +29,7 @@ app.use('/api/app', (req, res, next) => {
   next();
 });
 app.use(express.static(PUBLIC_DIR));
+app.use('/downloads', express.static(path.join(__dirname, 'downloads'), { fallthrough: false }));
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -240,6 +241,13 @@ app.put('/api/app/config', asyncRoute(async (req, res) => {
   for (const key of allowed) {
     if (typeof body[key] === 'string') patch[key] = body[key].trim();
   }
+  if (body.jobWorkers !== undefined) {
+    const workers = Number(body.jobWorkers);
+    if (!Number.isInteger(workers) || workers < 1 || workers > 8) {
+      throw httpError(400, 'Số luồng phải là số nguyên từ 1 đến 8.');
+    }
+    patch.jobWorkers = workers;
+  }
 
   if (patch.geminiBaseUrl && !isHttpUrl(patch.geminiBaseUrl)) {
     throw httpError(400, 'Gemini Base URL không hợp lệ.');
@@ -261,6 +269,13 @@ app.put('/api/app/config', asyncRoute(async (req, res) => {
   }
 
   config.save(patch);
+  if (patch.jobWorkers !== undefined && await pythonHealthy()) {
+    await pyRequest('/settings/concurrency', {
+      method: 'PUT',
+      body: { workers: patch.jobWorkers },
+      timeout: 5000
+    });
+  }
   res.json({ ok: true, config: config.publicConfig() });
 }));
 
@@ -357,10 +372,87 @@ app.post('/api/app/facebook/pages', asyncRoute(async (req, res) => {
   });
 }));
 
+app.post('/api/app/facebook/batches', asyncRoute(async (req, res) => {
+  const body = req.body || {};
+  const rawSources = Array.isArray(body.sources) ? body.sources : [];
+  if (!rawSources.length) throw httpError(400, 'Hãy nhập ít nhất một URL video YouTube.');
+  if (rawSources.length > 40) throw httpError(400, 'Mỗi lần chạy tối đa 40 URL video.');
+
+  const seen = new Set();
+  const publishedByVideoId = new Map();
+  for (const entry of history.list()) {
+    if (entry.status !== 'published' || !entry.link || !entry.source_url) continue;
+    const videoId = parseYouTubeId(entry.source_url);
+    if (videoId && !publishedByVideoId.has(videoId)) publishedByVideoId.set(videoId, entry.link);
+  }
+
+  const sources = rawSources.map((source, index) => {
+    const url = String(source && source.url || '').trim();
+    if (!isHttpUrl(url)) throw httpError(400, `URL video dòng ${index + 1} không hợp lệ.`);
+    const videoId = parseYouTubeId(url);
+    if (!videoId) throw httpError(400, `URL dòng ${index + 1} không phải link YouTube hợp lệ.`);
+    if (seen.has(videoId)) throw httpError(400, `URL YouTube bị lặp: ${videoId}.`);
+    seen.add(videoId);
+    const provided = String(source.articleUrl || '').trim();
+    if (provided && !isHttpUrl(provided)) {
+      throw httpError(400, `Link bài viết dòng ${index + 1} không hợp lệ.`);
+    }
+    return {
+      url,
+      articleUrl: provided || publishedByVideoId.get(videoId) || '',
+      mappedAutomatically: !provided && publishedByVideoId.has(videoId)
+    };
+  });
+
+  const cfg = fbConfig.get();
+  if (!cfg.accessToken) throw httpError(400, 'Chưa cấu hình Facebook access token. Mở Cài đặt.');
+  const pages = fbConfig.selectedPages();
+  if (!pages.length) throw httpError(400, 'Chưa chọn Page nào. Mở Cài đặt để chọn Page.');
+  const appCfg = config.get();
+  const common = {
+    pages: pages.map((page) => ({ id: page.id, name: page.name, accessToken: page.accessToken })),
+    hashtags: cfg.hashtags,
+    clipCount: cfg.clipCount,
+    minSeconds: cfg.minSeconds,
+    maxSeconds: cfg.maxSeconds,
+    vertical: cfg.vertical,
+    language: appCfg.language,
+    apiVersion: cfg.apiVersion,
+    keepFiles: true,
+    ai: config.aiConfig()
+  };
+
+  const results = await Promise.allSettled(sources.map(async (source, index) => {
+    const result = await pyRequest('/facebook/jobs', {
+      method: 'POST',
+      body: { ...common, url: source.url, articleUrl: source.articleUrl },
+      timeout: 30000
+    });
+    return {
+      index: index + 1,
+      jobId: result.jobId,
+      url: source.url,
+      articleUrl: source.articleUrl,
+      mappedAutomatically: source.mappedAutomatically
+    };
+  }));
+  const jobs = results.flatMap((item) => item.status === 'fulfilled' ? [item.value] : []);
+  const errors = results.flatMap((item, index) => item.status === 'rejected'
+    ? [{ index: index + 1, url: sources[index].url, error: item.reason.message || 'Không tạo được job.' }]
+    : []);
+  if (!jobs.length) throw httpError(502, errors[0]?.error || 'Không tạo được job Facebook nào.');
+
+  res.json({ ok: true, total: sources.length, concurrency: config.get().jobWorkers, jobs, errors });
+}));
+
 app.post('/api/app/facebook/jobs', asyncRoute(async (req, res) => {
   const body = req.body || {};
   const url = String(body.url || '').trim();
   if (!isHttpUrl(url)) throw httpError(400, 'Link video không hợp lệ.');
+  const articleUrl = String(body.articleUrl || '').trim();
+  if (articleUrl && !isHttpUrl(articleUrl)) {
+    throw httpError(400, 'Link bài viết không hợp lệ.');
+  }
 
   let cfg = fbConfig.get();
   if (!cfg.accessToken) {
@@ -372,6 +464,9 @@ app.post('/api/app/facebook/jobs', asyncRoute(async (req, res) => {
   }
   if (typeof body.hashtags === 'string') {
     cfg = fbConfig.save({ hashtags: body.hashtags.trim() });
+  }
+  if (body.minSeconds !== undefined || body.maxSeconds !== undefined || body.clipCount !== undefined) {
+    cfg = fbConfig.save({ minSeconds: body.minSeconds, maxSeconds: body.maxSeconds, clipCount: body.clipCount });
   }
 
   const appCfg = config.get();
@@ -391,6 +486,8 @@ app.post('/api/app/facebook/jobs', asyncRoute(async (req, res) => {
       vertical: cfg.vertical,
       language: appCfg.language,
       apiVersion: cfg.apiVersion,
+      articleUrl,
+      keepFiles: true,
       ai: config.aiConfig()
     },
     timeout: 30000
@@ -400,7 +497,8 @@ app.post('/api/app/facebook/jobs', asyncRoute(async (req, res) => {
     ok: true,
     jobId: result.jobId,
     pages: pages.map((page) => ({ id: page.id, name: page.name })),
-    clipCount: cfg.clipCount
+    clipCount: cfg.clipCount,
+    articleUrl
   });
 }));
 
@@ -420,6 +518,7 @@ app.get('/api/app/facebook/jobs/:id', asyncRoute(async (req, res) => {
       at: new Date().toISOString(),
       videoUrl: (result.metadata && result.metadata.webpage_url) || '',
       videoTitle: (result.metadata && result.metadata.title) || '',
+      articleUrl: result.articleUrl || '',
       pages: result.pages || [],
       clipCount: (result.clips || []).length,
       postedCount: result.postedCount || 0,

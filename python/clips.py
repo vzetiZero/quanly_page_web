@@ -176,6 +176,12 @@ def cut_vertical_clip(
 
     ffmpeg = ffmpeg_exe()
     os.makedirs(os.path.dirname(output), exist_ok=True)
+    partial_output = f"{output}.partial.mp4"
+    if os.path.isfile(partial_output):
+        try:
+            os.remove(partial_output)
+        except OSError:
+            pass
 
     if vertical:
         filters = (
@@ -222,7 +228,7 @@ def cut_vertical_clip(
         "-movflags",
         "+faststart",
         "-shortest",
-        output,
+        partial_output,
     ]
 
     if cancel is None:
@@ -260,9 +266,9 @@ def cut_vertical_clip(
                     process.communicate(timeout=10)
                 except subprocess.SubprocessError:
                     pass
-                if os.path.isfile(output):
+                if os.path.isfile(partial_output):
                     try:
-                        os.remove(output)
+                        os.remove(partial_output)
                     except OSError:
                         pass
                 raise ClipCancelled("Đã huỷ theo yêu cầu.")
@@ -277,14 +283,19 @@ def cut_vertical_clip(
         _, stderr = process.communicate()
         returncode = process.returncode
 
-    if returncode != 0 or not os.path.isfile(output):
+    if returncode != 0 or not os.path.isfile(partial_output):
         detail = (stderr or "").strip().splitlines()
         message = detail[-1] if detail else f"exit code {returncode}"
+        try:
+            os.remove(partial_output)
+        except OSError:
+            pass
         raise ClipError(f"ffmpeg không tạo được clip: {message}")
 
-    if os.path.getsize(output) < 10_000:
+    if os.path.getsize(partial_output) < 10_000:
         raise ClipError("Clip tạo ra quá nhỏ, có thể video nguồn không hợp lệ.")
 
+    os.replace(partial_output, output)
     return output
 
 

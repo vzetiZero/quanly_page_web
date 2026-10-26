@@ -7,6 +7,10 @@ tinycss2>=1.1.0
 imageio-ffmpeg>=0.5.1
 python-dotenv>=1.0.1
 
-# Optional: transcribe videos without captions.
-# Enable with WHISPER_ENABLED=1 and uncomment the line below.
-# faster-whisper>=1.1.0
+# Phiên âm tự động khi video không có phụ đề.
+# Pin chặt vì ctranslate2 4.8 / onnxruntime 1.31 / av 19 bị lỗi trên Windows 10.
+faster-whisper==1.2.1
+ctranslate2==4.5.0
+onnxruntime==1.20.1
+av==15.1.0
+setuptools<81

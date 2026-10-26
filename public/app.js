@@ -31,9 +31,13 @@ const state = {
   batchTotal: 0,
   batchCollapsed: false,
   batchActiveIndex: null,
+  batchPublished: {},
+  batchPublishErrors: {},
+  batchPublishing: false,
   fbConfig: null,
   fbHistory: [],
   fbJobId: null,
+  fbJobIds: [],
   fbTimer: null,
   fbPolls: 0,
   fbRunning: false,
@@ -112,6 +116,7 @@ async function loadHealth() {
     const health = await api('/health');
     state.config = health.config;
     applyConfigToForm();
+    if (state.fbConfig) renderFbSettings();
     if (health.python && !health.python.ok) {
       if (!(await waitForWorker())) {
         toast('Python worker chưa chạy. Phân tích video sẽ không hoạt động.', 'bad');
@@ -152,8 +157,84 @@ async function loadHistory() {
     const data = await api('/history');
     state.history = data.items || [];
     renderHistory();
+    renderFacebookSourceMapping();
   } catch (err) {
     console.warn('[history]', err);
+  }
+}
+
+function youtubeIdFromUrl(value) {
+  try {
+    const parsed = new URL(String(value || '').trim());
+    const host = parsed.hostname.replace(/^www\./i, '').toLowerCase();
+    if (host === 'youtu.be') return parsed.pathname.split('/').filter(Boolean)[0] || '';
+    if (!['youtube.com', 'm.youtube.com', 'music.youtube.com'].includes(host)) return '';
+    const queryId = parsed.searchParams.get('v');
+    if (queryId) return queryId;
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    return ['shorts', 'embed', 'live'].includes(parts[0]) ? (parts[1] || '') : '';
+  } catch {
+    return '';
+  }
+}
+
+function getFacebookSources() {
+  const textarea = $('#fb-source-list');
+  const lines = String(textarea ? textarea.value : '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const analyzeList = extractUrlList($('#input-urls')?.value || '');
+  const completedBatch = (state.batchItems || [])
+    .filter((item) => item.status === 'done' && item.url)
+    .map((item) => item.url);
+  const rows = lines.length
+    ? lines
+    : analyzeList.length
+      ? analyzeList
+      : completedBatch.length
+        ? completedBatch
+        : (state.videoUrl ? [state.videoUrl] : []);
+  const publishedById = new Map();
+  for (const entry of state.history || []) {
+    if (entry.status !== 'published' || !entry.link || !entry.source_url) continue;
+    const id = youtubeIdFromUrl(entry.source_url);
+    if (id && !publishedById.has(id)) publishedById.set(id, entry.link);
+  }
+  const seen = new Set();
+  return rows.map((line) => {
+    const [rawUrl, rawArticleUrl] = line.split('|', 2).map((part) => part.trim());
+    const url = rawUrl || '';
+    const videoId = youtubeIdFromUrl(url);
+    if (!videoId || seen.has(videoId)) return null;
+    seen.add(videoId);
+    const articleUrl = rawArticleUrl || publishedById.get(videoId) ||
+      (rows.length === 1 && url === state.videoUrl ? state.publishedLink : '');
+    return { url, videoId, articleUrl, autoMapped: !rawArticleUrl && Boolean(articleUrl) };
+  }).filter(Boolean);
+}
+
+function renderFacebookSourceMapping() {
+  const container = $('#fb-source-mapping');
+  if (!container) return;
+  container.innerHTML = '';
+  const sources = getFacebookSources();
+  if (!sources.length) {
+    container.textContent = 'Chưa có URL YouTube hợp lệ.';
+    return;
+  }
+  for (const [index, source] of sources.entries()) {
+    const row = document.createElement('div');
+    row.className = 'fb-source-map-row';
+    const sourceLink = document.createElement('a');
+    sourceLink.href = source.url;
+    sourceLink.target = '_blank';
+    sourceLink.rel = 'noopener';
+    sourceLink.textContent = `Nguồn ${index + 1} · ${source.videoId}`;
+    const mapping = document.createElement('span');
+    mapping.className = source.articleUrl ? 'fb-source-mapped' : 'fb-source-unmapped';
+    mapping.textContent = source.articleUrl
+      ? `${source.autoMapped ? 'Tự ghép' : 'Link chỉ định'}: ${source.articleUrl}`
+      : 'Chưa có bài đã đăng khớp; Reel không comment link.';
+    row.append(sourceLink, mapping);
+    container.appendChild(row);
   }
 }
 
@@ -200,12 +281,11 @@ function updateFacebookUi() {
     badgeText = 'Sẵn sàng';
     configText = `Sẵn sàng · ${selected} Page`;
     if (summary) {
-      const tags = cfg.hashtags ? cfg.hashtags : 'không hashtag';
       const clipCount = Number(cfg.clipCount) || 0;
       const reuse =
         selected > clipCount ? ' · Page dư sẽ dùng lại clip' : '';
       summary.textContent =
-        `${selected} Page · ${clipCount} clip tạo ra · mỗi Page nhận 1 clip ngẫu nhiên${reuse} · ${cfg.minSeconds}–${cfg.maxSeconds}s · ${tags}`;
+        `${selected} Page · ${clipCount} clip mỗi video · mỗi Page nhận 1 clip ngẫu nhiên${reuse} · ${cfg.minSeconds}–${cfg.maxSeconds}s · ${(state.config && state.config.jobWorkers) || 4} luồng`;
     }
   }
 
@@ -220,17 +300,11 @@ function updateFacebookUi() {
     item.classList.toggle('published', ready && !state.fbRunning);
   }
 
-  const hashtagInput = $('#fb-hashtags');
-  if (hashtagInput) {
-    if (document.activeElement !== hashtagInput && hashtagInput.value !== (cfg.hashtags || '')) {
-      hashtagInput.value = cfg.hashtags || '';
-    }
-    hashtagInput.disabled = state.fbRunning;
-  }
+  renderFacebookSourceMapping();
 
   if (runButton) {
-    runButton.disabled = !ready || !state.videoUrl || state.fbRunning;
-    runButton.textContent = state.fbRunning ? 'Đang chạy...' : 'Tạo clip & đăng Facebook';
+    runButton.disabled = !ready || !getFacebookSources().length || state.fbRunning;
+    runButton.textContent = state.fbRunning ? 'Đang chạy các URL...' : 'Tạo clip & đăng Facebook';
   }
 
   updateCancelButtons();
@@ -362,9 +436,9 @@ function showFbError(message) {
 
 async function startFacebookJob() {
   const cfg = state.fbConfig || {};
-  const url = state.videoUrl || $('#input-url').value.trim();
-  if (!url) {
-    toast('Chưa có link video. Phân tích video trước.', 'bad');
+  const sources = getFacebookSources();
+  if (!sources.length) {
+    toast('Dán ít nhất một URL YouTube hợp lệ vào danh sách nguồn.', 'bad');
     return;
   }
   if (!cfg.hasAccessToken) {
@@ -379,12 +453,10 @@ async function startFacebookJob() {
   }
   if (state.fbRunning) return;
 
-  const hashtags = ($('#fb-hashtags') ? $('#fb-hashtags').value : '').trim();
-  state.fbConfig = { ...cfg, hashtags };
-
   clearTimeout(state.fbTimer);
   state.fbRunning = true;
   state.fbJobId = null;
+  state.fbJobIds = [];
   state.fbPolls = 0;
   state.fbResult = null;
   state.fbLastStage = '';
@@ -395,23 +467,82 @@ async function startFacebookJob() {
   $('#fb-results').innerHTML = '';
   $('#fb-log').innerHTML = '';
   $('#fb-bar').style.width = '2%';
-  $('#fb-message').textContent = 'Đang gửi yêu cầu...';
+  $('#fb-message').textContent = `Đang gửi ${sources.length} URL nguồn...`;
   $('#fb-dot').className = 'status-dot busy';
   updateFacebookUi();
   $('#card-facebook').scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
 
   try {
-    const response = await api('/facebook/jobs', { method: 'POST', body: { url, hashtags } });
-    state.fbJobId = response.jobId;
-    pollFacebookJob();
+    const response = await api('/facebook/batches', {
+      method: 'POST',
+      body: { sources }
+    });
+    state.fbJobIds = (response.jobs || []).map((job) => job.jobId).filter(Boolean);
+    if (!state.fbJobIds.length) throw new Error('Worker không tạo được job cho các URL nguồn.');
+    await pollFacebookBatch(response.jobs || [], response.concurrency || 1, response.errors || []);
   } catch (err) {
     state.fbRunning = false;
     state.fbJobId = null;
+    state.fbJobIds = [];
     updateFacebookUi();
     $('#fb-progress').hidden = false;
     showFbError(err.message);
     toast(err.message, 'bad');
   }
+}
+
+async function pollFacebookBatch(sources, concurrency, initialErrors = []) {
+  const jobs = sources.map((source) => ({ ...source, status: 'queued', lastStage: '' }));
+  const total = jobs.length;
+  const errors = initialErrors.map((item) => `${item.url}: ${item.error}`);
+  const finished = new Set();
+  while (state.fbRunning && finished.size < total) {
+    const active = jobs.filter((job) => !finished.has(job.jobId));
+    const snapshots = await Promise.all(active.map(async (source) => {
+      try {
+        const job = await api(`/facebook/jobs/${encodeURIComponent(source.jobId)}`);
+        source.status = job.status;
+        if (job.stage && job.stage !== source.lastStage) {
+          source.lastStage = job.stage;
+          addFbLog(`Nguồn ${source.index}/${total}: ${FB_STAGE_LABELS[job.stage] || job.stage}`);
+        }
+        if (['done', 'error', 'cancelled'].includes(job.status)) {
+          finished.add(source.jobId);
+          if (job.result) {
+            renderFbResults({ ...job.result, sourceTitle: job.result.metadata?.title || source.url }, false, { append: true });
+          }
+          if (job.status === 'error') errors.push(`${source.url}: ${job.error || 'Lỗi không rõ'}`);
+          if (job.status === 'cancelled') errors.push(`${source.url}: đã huỷ`);
+        }
+        return { source, job };
+      } catch (error) {
+        source.pollFailures = (source.pollFailures || 0) + 1;
+        source.pollError = error.message;
+        if (source.pollFailures >= 5) {
+          finished.add(source.jobId);
+          errors.push(`${source.url}: ${error.message}`);
+        }
+        return { source, job: null };
+      }
+    }));
+    const percent = snapshots.reduce((sum, item) => sum + (Number(item.job?.percent) || 0), 0) / Math.max(1, total);
+    $('#fb-bar').style.width = `${Math.min(100, percent)}%`;
+    const doneCount = finished.size;
+    $('#fb-message').textContent = `Đã xong ${doneCount}/${total} URL · tối đa ${concurrency} luồng song song`;
+    if (finished.size < total) await new Promise((resolve) => setTimeout(resolve, 2200));
+  }
+  state.fbRunning = false;
+  state.fbJobId = null;
+  state.fbJobIds = [];
+  updateFacebookUi();
+  $('#fb-bar').style.width = '100%';
+  $('#fb-dot').className = errors.length ? 'status-dot bad' : 'status-dot ok';
+  $('#fb-message').textContent = errors.length
+    ? `Hoàn tất ${total} URL · ${errors.length} URL cần chú ý`
+    : `Hoàn tất ${total} URL nguồn`;
+  if (errors.length) showFbError(errors.join('\n'));
+  toast($('#fb-message').textContent, errors.length ? 'bad' : 'ok');
+  loadFbHistory();
 }
 
 async function pollFacebookJob() {
@@ -534,23 +665,35 @@ function onFbJobCancelled(job) {
   loadFbHistory();
 }
 
-function renderFbResults(result, running) {
-  const box = $('#fb-results');
+function renderFbResults(result, running, { append = false } = {}) {
+  const container = $('#fb-results');
   const clips = Array.isArray(result.clips) ? result.clips : [];
   const posts = Array.isArray(result.posts) ? result.posts : [];
   if (!clips.length) {
-    box.hidden = true;
+    if (!append) container.hidden = true;
     return;
   }
 
-  box.hidden = false;
-  box.innerHTML = '';
+  container.hidden = false;
+  if (!append) container.innerHTML = '';
+  const box = document.createElement('section');
+  box.className = 'fb-source-result';
+  if (result.sourceTitle) {
+    const sourceTitle = document.createElement('h3');
+    sourceTitle.className = 'fb-source-title';
+    sourceTitle.textContent = result.sourceTitle;
+    box.appendChild(sourceTitle);
+  }
 
   const posted = posts.filter((post) => post.ok).length;
   const failed = posts.filter((post) => !post.ok).length;
+  const commented = posts.filter((post) => post.comment).length;
+  const commentFailed = posts.filter((post) => post.commentError).length;
   const summary = document.createElement('div');
   summary.className = 'fb-config-line';
   const parts = [`${clips.length} clip`, `${posted} video đã đăng`];
+  if (commented) parts.push(`${commented} comment link bài`);
+  if (commentFailed) parts.push(`${commentFailed} comment lỗi`);
   if (failed) parts.push(`${failed} lỗi`);
   if (running) parts.push('đang xử lý...');
   summary.textContent = parts.join(' · ');
@@ -582,8 +725,24 @@ function renderFbResults(result, running) {
       item.appendChild(desc);
     }
 
+    if (clip.hashtags) {
+      const tags = document.createElement('p');
+      tags.className = 'muted small';
+      tags.textContent = clip.hashtags;
+      item.appendChild(tags);
+    }
+
     const links = document.createElement('div');
     links.className = 'fb-clip-links';
+    if (clip.fileUrl) {
+      const open = document.createElement('a');
+      open.className = 'btn btn-mini btn-primary';
+      open.href = clip.fileUrl;
+      open.target = '_blank';
+      open.rel = 'noopener';
+      open.textContent = 'Mở video';
+      links.appendChild(open);
+    }
     const related = posts.filter((post) => Number(post.clipIndex) === Number(clip.index));
     if (!related.length) {
       const pending = document.createElement('span');
@@ -602,6 +761,18 @@ function renderFbResults(result, running) {
           anchor.rel = 'noopener';
           anchor.textContent = `${post.pageName || 'Facebook'} · Reel`;
           links.appendChild(anchor);
+
+          if (post.comment) {
+            const note = document.createElement('span');
+            note.className = 'muted small';
+            note.textContent = 'Đã comment link bài viết';
+            links.appendChild(note);
+          } else if (post.commentError) {
+            const error = document.createElement('span');
+            error.className = 'fb-clip-error';
+            error.textContent = `Comment lỗi: ${post.commentError}`;
+            links.appendChild(error);
+          }
         } else {
           const error = document.createElement('span');
           error.className = 'fb-clip-error';
@@ -630,6 +801,7 @@ function renderFbResults(result, running) {
     item.appendChild(links);
     box.appendChild(item);
   }
+  container.appendChild(box);
 }
 
 /* ---------- Facebook settings ---------- */
@@ -658,6 +830,9 @@ function renderFbSettings() {
   }
   $('#set-fb-version').value = cfg.apiVersion || 'v25.0';
   $('#set-fb-clip-count').value = cfg.clipCount || 5;
+  $('#set-fb-min-seconds').value = cfg.minSeconds || 45;
+  $('#set-fb-max-seconds').value = cfg.maxSeconds || 75;
+  $('#set-job-workers').value = (state.config && state.config.jobWorkers) || 4;
   renderFbPages(cfg.pages || [], cfg.selectedPageIds || []);
 }
 
@@ -1034,6 +1209,7 @@ function bindEvents() {
   $('#btn-cancel-job').addEventListener('click', cancelAllJobs);
   $('#btn-retry').addEventListener('click', () => startAnalyze());
   $('#btn-batch').addEventListener('click', startBatch);
+  $('#btn-batch-publish').addEventListener('click', publishBatch);
   $('#btn-batch-cancel').addEventListener('click', () => cancelBatch());
   $('#btn-batch-hide').addEventListener('click', () => {
     state.batchCollapsed = !state.batchCollapsed;
@@ -1042,8 +1218,12 @@ function bindEvents() {
   $('#btn-batch-clear').addEventListener('click', () => {
     $('#input-urls').value = '';
     updateBatchCount();
+    updateFacebookUi();
   });
-  $('#input-urls').addEventListener('input', updateBatchCount);
+  $('#input-urls').addEventListener('input', () => {
+    updateBatchCount();
+    updateFacebookUi();
+  });
 
   $('#edit-title').addEventListener('input', () => {
     if (!state.slugTouched) {
@@ -1115,7 +1295,7 @@ function bindEvents() {
   $('#btn-test-site').addEventListener('click', testSite);
   $('#btn-fb-run').addEventListener('click', startFacebookJob);
   $('#btn-fb-cancel').addEventListener('click', cancelAllJobs);
-  $('#fb-hashtags').addEventListener('change', saveFbHashtags);
+  $('#fb-source-list').addEventListener('input', updateFacebookUi);
   $('#btn-fb-settings').addEventListener('click', openFacebookView);
 
   $$('.view-tab').forEach((tab) => {
@@ -1374,6 +1554,7 @@ async function cancelAllJobs() {
   const ids = [];
   if (state.jobId) ids.push(state.jobId);
   if (state.fbJobId) ids.push(state.fbJobId);
+  ids.push(...(state.fbJobIds || []));
   const unique = [...new Set(ids)];
   const batchId = state.batchRunning ? state.batchId : null;
   if (!unique.length && !batchId) {
@@ -1527,6 +1708,9 @@ async function startBatch() {
   state.batchTotal = urls.length;
   state.batchCollapsed = false;
   state.batchActiveIndex = null;
+  state.batchPublished = {};
+  state.batchPublishErrors = {};
+  state.batchPublishing = false;
 
   const card = $('#card-batch');
   card.hidden = false;
@@ -1536,6 +1720,8 @@ async function startBatch() {
   $('#batch-badge').textContent = `0/${urls.length}`;
   $('#batch-badge').classList.remove('published');
   $('#batch-summary').textContent = `Đang gửi ${urls.length} video tới worker...`;
+  setBatchPublishStatus('');
+  updateBatchPublishButton();
   updateBatchCancelButton();
   renderBatchVisibility();
   setBatchButtonBusy(true);
@@ -1606,6 +1792,8 @@ function renderBatch(data) {
   const total = data.total || items.length;
   const finished = done + failed + cancelled;
 
+  seedBatchPublishedFromHistory(items);
+
   const badge = $('#batch-badge');
   badge.textContent = `${finished}/${total}`;
   badge.classList.toggle('published', total > 0 && finished === total && failed === 0);
@@ -1616,15 +1804,183 @@ function renderBatch(data) {
   if (failed) parts.push(`${failed} lỗi`);
   if (cancelled) parts.push(`${cancelled} đã huỷ`);
   $('#batch-summary').textContent =
-    `${parts.join(' · ')} · song song ${data.concurrency || 4} luồng`;
+    `${parts.join(' · ')} · song song ${data.concurrency || '—'} luồng`;
 
   $('#batch-bar').style.width = `${Math.min(100, Math.max(0, Number(data.percent) || 0))}%`;
 
   for (const item of items) {
     updateBatchCard(ensureBatchCard(item), item);
   }
+  updateBatchPublishButton();
   updateBatchCancelButton();
   renderBatchVisibility();
+}
+
+function batchDoneItems() {
+  return (state.batchItems || []).filter(
+    (item) => item.status === 'done' && item.result && item.result.article
+  );
+}
+
+function batchPendingItems() {
+  return batchDoneItems().filter((item) => !state.batchPublished[item.index]);
+}
+
+function seedBatchPublishedFromHistory(items) {
+  if (!Array.isArray(state.history) || !state.history.length) return;
+  const byUrl = new Map();
+  for (const entry of state.history) {
+    if (entry.status !== 'published' || !entry.link || !entry.source_url) continue;
+    byUrl.set(String(entry.source_url).trim().toLowerCase(), {
+      link: entry.link,
+      postId: entry.post_id,
+      historyId: entry.id
+    });
+  }
+  if (!byUrl.size) return;
+  for (const item of items || []) {
+    if (state.batchPublished[item.index]) continue;
+    const found = byUrl.get(String(item.url || '').trim().toLowerCase());
+    if (found) state.batchPublished[item.index] = found;
+  }
+}
+
+function setBatchPublishStatus(message) {
+  const status = $('#batch-publish-status');
+  if (status) status.textContent = message || '';
+}
+
+function updateBatchPublishButton() {
+  const button = $('#btn-batch-publish');
+  if (!button) return;
+  const pending = batchPendingItems();
+  const alreadyPublished = batchDoneItems().length - pending.length;
+  button.disabled = state.batchPublishing || pending.length === 0;
+  if (state.batchPublishing) {
+    button.textContent = 'Đang đăng...';
+    return;
+  }
+  button.textContent = pending.length
+    ? `Đăng hàng loạt (${pending.length} bài mới${alreadyPublished ? ` · ${alreadyPublished} đã đăng` : ''})`
+    : alreadyPublished
+      ? `Đăng hàng loạt (0 bài mới · ${alreadyPublished} đã đăng)`
+      : 'Đăng hàng loạt';
+}
+
+function updateBatchPublishCard(index) {
+  const item = (state.batchItems || []).find(
+    (row) => Number(row.index) === Number(index)
+  );
+  const card = $(`#batch-grid .batch-card[data-index="${index}"]`);
+  if (item && card) updateBatchCard(card, item);
+}
+
+async function publishBatch() {
+  if (state.batchPublishing) return;
+  const pending = batchPendingItems();
+  if (!pending.length) {
+    toast('Không còn bài nào cần đăng.', 'bad');
+    return;
+  }
+  if (!state.config || !state.config.hasSiteKey) {
+    toast('Chưa cấu hình API key website.', 'bad');
+    openSettings();
+    return;
+  }
+
+  const ok = window.confirm(
+    `Đăng ${pending.length} bài đã phân tích lên website? Mỗi bài dùng đúng permalink và ảnh YouTube của video gốc.`
+  );
+  if (!ok) return;
+
+  state.batchPublishing = true;
+  $('#batch-error').hidden = true;
+  setBatchPublishStatus('');
+  updateBatchPublishButton();
+  let success = 0;
+  const failures = [];
+
+  for (let offset = 0; offset < pending.length; offset += 1) {
+    const item = pending[offset];
+    const article = item.result.article;
+    setBatchPublishStatus(
+      `Đang đăng ${offset + 1}/${pending.length}: ${article.title || `video #${item.index}`}`
+    );
+
+    try {
+      const metadata = item.result.metadata || item.metadata || {};
+      const thumbnail = metadata.thumbnail || youtubeThumb(item.url);
+      const result = await api('/publish', {
+        method: 'POST',
+        body: {
+          title: article.title,
+          permalink: article.permalink,
+          seo_description: article.seo_description,
+          tags: article.tags || [],
+          content_html: article.content_html,
+          thumbnail_url: thumbnail,
+          video_url: item.url,
+          category_id: article.category_id || undefined
+        }
+      });
+
+      const entry = {
+        status: 'published',
+        title: article.title,
+        permalink: article.permalink,
+        seo_description: article.seo_description,
+        tags: article.tags || [],
+        content_html: article.content_html,
+        key_points: article.key_points || [],
+        quotes: article.quotes || [],
+        thumbnail_url: thumbnail,
+        video_url: item.url,
+        source_url: item.url,
+        category_id: article.category_id || '',
+        category: article.category || '',
+        link: result.link || '',
+        post_id: result.postId || undefined,
+        metadata: item.metadata || metadata
+      };
+      let historyId = '';
+      try {
+        const saved = await api('/history', { method: 'POST', body: entry });
+        historyId = saved.entry.id;
+      } catch (err) {
+        console.warn('Không lưu được lịch sử cho bài đã đăng:', err.message);
+      }
+
+      state.batchPublished[item.index] = {
+        link: result.link || '',
+        postId: result.postId,
+        historyId
+      };
+      delete state.batchPublishErrors[item.index];
+      success += 1;
+    } catch (err) {
+      state.batchPublishErrors[item.index] = err.message;
+      failures.push(`#${item.index}: ${err.message}`);
+    }
+
+    updateBatchPublishCard(item.index);
+    updateBatchPublishButton();
+  }
+
+  state.batchPublishing = false;
+  await loadHistory();
+  updateBatchPublishButton();
+  setBatchPublishStatus(
+    failures.length
+      ? `Đã đăng ${success}/${pending.length} bài. ${failures.length} bài lỗi.`
+      : `Đã đăng ${success} bài lên website.`
+  );
+
+  if (failures.length) {
+    showBatchError(`Đăng lỗi ${failures.length} bài: ${failures.join(' · ')}`);
+    toast(`Đăng được ${success}/${pending.length} bài.`, 'bad');
+  } else {
+    toast(`Đã đăng ${success} bài lên website.`, 'ok');
+  }
 }
 
 function ensureBatchCard(item) {
@@ -1679,7 +2035,6 @@ function updateBatchCard(card, item) {
   const refs = card._refs;
   if (!refs) return;
   const status = BATCH_STATUS_LABELS[item.status] ? item.status : 'queued';
-  const previousStatus = card.dataset.status;
   const article = item.result && item.result.article;
 
   card.dataset.status = status;
@@ -1727,16 +2082,35 @@ function updateBatchCard(card, item) {
   refs.error.hidden = !(status === 'error' && item.error);
   refs.error.textContent = item.error || '';
 
-  if (previousStatus === status) return;
+  const published = state.batchPublished[item.index];
+  const publishError = state.batchPublishErrors[item.index];
+  const footSignature = `${status}|${published ? published.link || 'published' : ''}|${publishError || ''}`;
+  if (card.dataset.footSignature === footSignature) return;
+  card.dataset.footSignature = footSignature;
 
   refs.foot.innerHTML = '';
   if (status === 'done' && article) {
+    if (published && published.link) {
+      const link = document.createElement('a');
+      link.className = 'btn btn-mini btn-primary';
+      link.href = published.link;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = 'Bài đã đăng';
+      refs.foot.appendChild(link);
+    }
     const open = document.createElement('button');
     open.type = 'button';
-    open.className = 'btn btn-mini btn-primary';
+    open.className = 'btn btn-mini';
     open.textContent = 'Mở bài';
     open.addEventListener('click', () => openBatchItem(item));
     refs.foot.appendChild(open);
+    if (publishError) {
+      const warn = document.createElement('span');
+      warn.className = 'batch-publish-error';
+      warn.textContent = `Đăng lỗi: ${publishError}`;
+      refs.foot.appendChild(warn);
+    }
   } else if (status === 'error') {
     const retry = document.createElement('button');
     retry.type = 'button';
@@ -1770,8 +2144,33 @@ function openBatchItem(item) {
   for (const card of $$('#batch-grid .batch-card')) {
     card.classList.toggle('active', Number(card.dataset.index) === Number(item.index));
   }
+
+  const published = state.batchPublished[item.index];
+  if (published && published.link) {
+    const entry = (state.history || []).find(
+      (row) => published.historyId && row.id === published.historyId
+    );
+    if (entry) {
+      openHistoryItem(entry);
+      toast(`Đã mở bài #${item.index} (đã đăng).`, 'ok');
+      return;
+    }
+  }
+
   state.lastPayload = { url: item.url || '' };
   onJobDone({ status: 'done', result: item.result });
+
+  if (published && published.link) {
+    state.draftId = null;
+    state.status = 'published';
+    state.publishedLink = published.link;
+    state.postId = published.postId || null;
+    setDraftBadge('published');
+    updatePublishButton();
+    showPublishedLink(published.link);
+    updateFacebookUi();
+  }
+
   toast(`Đã mở bài #${item.index} trong trình biên tập.`, 'ok');
 }
 
@@ -1822,7 +2221,7 @@ function onBatchFinished(data) {
   const total = data.total || state.batchTotal;
   if (done) {
     toast(
-      `Xong ${done}/${total} video. Bấm "Mở bài" trên thẻ để biên tập và đăng.`,
+      `Xong ${done}/${total} video. Bấm "Đăng hàng loạt" để đăng tất cả, hoặc "Mở bài" để biên tập trước.`,
       failed ? '' : 'ok'
     );
   } else {
@@ -2146,6 +2545,7 @@ function showPublishedLink(link) {
 
   resetVisibility();
   box.hidden = false;
+  updateFacebookUi();
 }
 
 function resetVisibility() {
@@ -2195,12 +2595,10 @@ async function checkVisibility(notify = false) {
       text.textContent = 'Bài đã hiển thị trong mục Latest News trên trang chủ.';
       hint.hidden = true;
     } else if (result.onHome) {
-      row.className = 'visibility-line warn';
-      dot.className = 'status-dot busy';
-      text.textContent = 'Bài đã nằm trong trang chủ nhưng chưa hiện ở Latest News.';
-      hint.innerHTML =
-        `Danh sách Latest News đang lấy từ cache cũ. Vào <a href="${result.adminUrl}" target="_blank" rel="noopener">Quản trị website</a> để xoá cache, hoặc chờ khoảng 1–4 giờ rồi bấm "Kiểm tra trang chủ".`;
-      hint.hidden = false;
+      row.className = 'visibility-line ok';
+      dot.className = 'status-dot ok';
+      text.textContent = 'Bài đã có trên trang chủ.';
+      hint.hidden = true;
     } else {
       row.className = 'visibility-line warn';
       dot.className = 'status-dot bad';
@@ -2458,26 +2856,13 @@ function closeSettings() {
   if (dialog.open) dialog.close();
 }
 
-async function saveFbHashtags() {
-  const value = $('#fb-hashtags').value.trim();
-  if (!state.fbConfig || value === (state.fbConfig.hashtags || '')) return;
-  try {
-    const response = await api('/facebook/config', {
-      method: 'PUT',
-      body: { hashtags: value }
-    });
-    state.fbConfig = response.config;
-    updateFacebookUi();
-  } catch (err) {
-    toast(`Không lưu được hashtag: ${err.message}`, 'bad');
-  }
-}
-
 async function saveFacebookSettings({ silent = false } = {}) {
   const button = $('#btn-fb-save');
   const payload = {
     apiVersion: $('#set-fb-version').value.trim(),
     clipCount: Number($('#set-fb-clip-count').value) || 5,
+    minSeconds: Number($('#set-fb-min-seconds').value) || 45,
+    maxSeconds: Number($('#set-fb-max-seconds').value) || 75,
     selectedPageIds: collectFbSelectedPageIds()
   };
   const token = $('#set-fb-token').value.trim();
@@ -2488,6 +2873,15 @@ async function saveFacebookSettings({ silent = false } = {}) {
   if (status) status.textContent = 'Đang lưu...';
 
   try {
+    const workerCount = Number($('#set-job-workers').value);
+    if (!Number.isInteger(workerCount) || workerCount < 1 || workerCount > 8) {
+      throw new Error('Số luồng phải là số nguyên từ 1 đến 8.');
+    }
+    const appConfig = await api('/config', {
+      method: 'PUT',
+      body: { jobWorkers: workerCount }
+    });
+    state.config = appConfig.config;
     const response = await api('/facebook/config', { method: 'PUT', body: payload });
     state.fbConfig = response.config;
     renderFbSettings();

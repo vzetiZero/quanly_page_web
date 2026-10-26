@@ -125,7 +125,8 @@ Hard rules:
 3. Clips must not overlap and must be ordered by start time.
 4. Each title must be 40-80 characters, specific, and must NOT contain hashtags.
 5. Each description must be 2-4 factual sentences that hook the viewer, without hashtags.
-6. Output a single valid JSON object. No markdown fences, no commentary.
+6. Each clip must include 3-5 relevant English hashtags (no # prefix) based on that clip's topic.
+7. Output a single valid JSON object. No markdown fences, no commentary.
 """
 
 MAX_TIMED_TRANSCRIPT_CHARS = 60000
@@ -193,6 +194,7 @@ Return a single JSON object with exactly this shape:
       "end": 60,
       "title": "specific 40-80 character title without hashtags",
       "description": "2-4 factual sentences without hashtags",
+      "hashtags": ["3-5 relevant hashtags without the # prefix"],
       "reason": "why this moment works in one short sentence"
     }}
   ]
