@@ -17,6 +17,12 @@ DEFAULT_MODEL = "gemini-2.5-flash"
 class AIError(Exception):
     """Raised when the configured LLM endpoint fails or returns unusable data."""
 
+    def __init__(self, message: str, *, retryable: bool = True, status_code: int | None = None):
+        super().__init__(message)
+        # Lỗi cấu hình (key sai, model không tồn tại) thử lại cũng không đổi kết quả.
+        self.retryable = retryable
+        self.status_code = status_code
+
 
 def resolve_style(ai: dict) -> str:
     style = (ai.get("apiStyle") or "auto").strip().lower()
@@ -126,7 +132,7 @@ def _extract_google_text(data: dict) -> str:
         return "".join(parts)
     block = (data.get("promptFeedback") or {}).get("blockReason")
     if block:
-        raise AIError(f"Gemini chặn nội dung (lý do: {block}).")
+        raise AIError(f"Gemini chặn nội dung (lý do: {block}).", retryable=False)
     finish = (data.get("candidates") or [{}])[0].get("finishReason")
     raise AIError(f"Gemini không trả về nội dung (finishReason: {finish or 'unknown'}).")
 
@@ -157,7 +163,10 @@ def generate_json(
     """Return (parsed_json, meta) where meta has model/style/latency/usage."""
     api_key = (ai.get("apiKey") or "").strip()
     if not api_key:
-        raise AIError("Chưa cấu hình API key cho Gemini/LLM. Mở Cài đặt để nhập.")
+        raise AIError(
+            "Chưa cấu hình API key cho Gemini/LLM. Mở Cài đặt để nhập.",
+            retryable=False,
+        )
 
     base = (ai.get("baseUrl") or DEFAULT_GOOGLE_BASE).strip()
     model = (ai.get("model") or DEFAULT_MODEL).strip().removeprefix("models/")
@@ -200,14 +209,21 @@ def generate_json(
         if response.status_code in (401, 403):
             raise AIError(
                 f"API key bị từ chối (HTTP {response.status_code}). "
-                "Kiểm tra key và Base URL/kiểu API trong Cài đặt. Chi tiết: " + detail
+                "Kiểm tra key và Base URL/kiểu API trong Cài đặt. Chi tiết: " + detail,
+                retryable=False,
+                status_code=response.status_code,
             )
         if response.status_code == 404:
             raise AIError(
                 f"Không tìm thấy endpoint/model (HTTP 404). Kiểm tra Base URL và tên model. "
-                f"Chi tiết: {detail}"
+                f"Chi tiết: {detail}",
+                retryable=False,
+                status_code=response.status_code,
             )
-        raise AIError(f"AI trả về lỗi HTTP {response.status_code}: {detail}")
+        raise AIError(
+            f"AI trả về lỗi HTTP {response.status_code}: {detail}",
+            status_code=response.status_code,
+        )
 
     try:
         data = response.json()

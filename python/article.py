@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import re
 import unicodedata
 
@@ -106,6 +107,120 @@ def _clean_tag(tag: str) -> str:
     return tag[:40]
 
 
+TAG_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "this",
+    "that",
+    "about",
+    "into",
+    "over",
+}
+
+
+def _tag_key(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", slugify(text, max_len=120))
+
+
+def _tag_words(text: str) -> list[str]:
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(text or ""))
+    return [
+        word.lower()
+        for word in re.split(r"[^A-Za-z0-9]+", spaced)
+        if len(word) >= 3
+    ]
+
+
+def _match_existing_tag(tag: str, entries: list[tuple[str, str, str]]) -> str:
+    """Map one AI-written tag to the closest tag that exists on the site."""
+    folded = tag.casefold()
+    key = _tag_key(tag)
+    for name, name_key, compact in entries:
+        if folded == name_key or key == compact:
+            return name
+
+    if len(key) >= 4:
+        contained = {
+            name
+            for name, _, compact in entries
+            if len(compact) >= 4 and (key in compact or compact in key)
+        }
+        if len(contained) == 1:
+            return contained.pop()
+
+    close = difflib.get_close_matches(
+        key, [compact for _, _, compact in entries], n=1, cutoff=0.88
+    )
+    if close:
+        for name, _, compact in entries:
+            if compact == close[0]:
+                return name
+    return ""
+
+
+def _context_tags(text: str, available: list[str], limit: int) -> list[str]:
+    """Pick site tags whose every word appears in the article text."""
+    haystack = " " + re.sub(r"[^a-z0-9]+", " ", _plain(text).lower()) + " "
+    scored: list[tuple[int, int, str]] = []
+    for name in available:
+        words = [word for word in _tag_words(name) if word not in TAG_STOPWORDS]
+        if not words:
+            continue
+        if all(f" {word} " in haystack for word in words):
+            scored.append((len(words), 0, name))
+    scored.sort(reverse=True)
+    return [name for _, _, name in scored[:limit]]
+
+
+def _resolve_tags(
+    raw_tags: list[str],
+    site_tags: list[str] | None,
+    context_text: str,
+    limit: int = 5,
+) -> list[str]:
+    """Keep only tags that exist on the site; never leave AI-invented tags."""
+    available = [str(tag).strip() for tag in (site_tags or []) if str(tag).strip()]
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in raw_tags:
+        tag = _clean_tag(item)
+        key = tag.casefold()
+        if tag and key not in seen:
+            seen.add(key)
+            cleaned.append(tag)
+
+    if not available:
+        return cleaned[:limit]
+
+    entries = [
+        (name, name.casefold(), _tag_key(name))
+        for name in available
+        if _tag_key(name)
+    ]
+    resolved: list[str] = []
+    chosen: set[str] = set()
+    for tag in cleaned:
+        match = _match_existing_tag(tag, entries)
+        if match and match.casefold() not in chosen:
+            chosen.add(match.casefold())
+            resolved.append(match)
+        if len(resolved) >= limit:
+            return resolved
+
+    if len(resolved) < min(2, limit):
+        for candidate in _context_tags(context_text, available, limit):
+            if candidate.casefold() in chosen:
+                continue
+            chosen.add(candidate.casefold())
+            resolved.append(candidate)
+            if len(resolved) >= min(2, limit):
+                break
+    return resolved[:limit]
+
+
 def _match_category(value: str, categories: list[dict]) -> tuple[str, int | None]:
     if not value:
         return "", None
@@ -127,6 +242,7 @@ def normalize_article(
     metadata: dict,
     options: dict,
     categories: list[dict] | None = None,
+    site_tags: list[str] | None = None,
 ) -> dict:
     warnings: list[str] = []
     categories = categories or []
@@ -163,16 +279,11 @@ def normalize_article(
     raw_tags = raw.get("tags") or []
     if isinstance(raw_tags, str):
         raw_tags = re.split(r"[,;]", raw_tags)
-    tags: list[str] = []
-    seen: set[str] = set()
-    for item in raw_tags:
-        tag = _clean_tag(item)
-        key = tag.casefold()
-        if tag and key not in seen:
-            seen.add(key)
-            tags.append(tag)
-        if len(tags) >= 8:
-            break
+    tags = _resolve_tags(
+        list(raw_tags),
+        site_tags,
+        f"{title}\n{_plain(content)[:6000]}",
+    )
 
     category, category_id = _match_category(str(raw.get("category") or ""), categories)
     if not category:

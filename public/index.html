@@ -39,7 +39,7 @@
           <div class="step-badge">1</div>
           <div class="grow">
             <h2>Chọn video nguồn</h2>
-            <p>Dán link YouTube. Hệ thống lấy transcript, phân tích và viết bài báo tiếng Anh (hoặc tiếng Việt).</p>
+            <p>Dán một link hoặc cả danh sách link YouTube. Hệ thống lấy transcript, phân tích và viết bài báo tiếng Anh (hoặc tiếng Việt).</p>
           </div>
         </div>
 
@@ -93,7 +93,44 @@
             <button class="btn btn-primary" id="btn-analyze" type="submit">Phân tích &amp; viết bài</button>
             <span class="muted small">Video 10–30 phút thường mất 30–90 giây.</span>
           </div>
+
+          <div class="source-divider"><span>hoặc chạy nhiều video cùng lúc</span></div>
+
+          <div class="batch-input" id="batch-input">
+            <label class="field">
+              <span class="label">Danh sách link YouTube (mỗi dòng một link)</span>
+              <textarea id="input-urls" rows="4" placeholder="https://www.youtube.com/watch?v=...&#10;https://youtu.be/..." spellcheck="false"></textarea>
+              <span class="hint">Chạy song song 4 video. Nếu AI lỗi hoặc chưa trả JSON, hệ thống tự thử lại cho tới khi có bài hợp lệ.</span>
+            </label>
+            <div class="form-actions">
+              <button class="btn btn-primary" id="btn-batch" type="button">Phân tích hàng loạt</button>
+              <button class="btn btn-ghost btn-mini" id="btn-batch-clear" type="button">Xoá danh sách</button>
+              <span class="muted small" id="batch-count"></span>
+            </div>
+          </div>
         </form>
+      </div>
+
+      <div class="card" id="card-batch" hidden>
+        <div class="card-head">
+          <div class="step-badge batch-step">N</div>
+          <div class="grow">
+            <h2>Phân tích hàng loạt</h2>
+            <p id="batch-summary" role="status">Đang chuẩn bị...</p>
+          </div>
+          <span class="badge" id="batch-badge">0/0</span>
+          <button class="btn btn-danger btn-mini" id="btn-batch-cancel" type="button" hidden>HUỶ TẤT CẢ</button>
+          <button class="btn btn-mini" id="btn-batch-hide" type="button">Thu nhỏ</button>
+        </div>
+
+        <div class="progress-track"><div class="progress-bar" id="batch-bar"></div></div>
+
+        <div class="error-box" id="batch-error" role="alert" hidden>
+          <strong>Không chạy được danh sách</strong>
+          <p id="batch-error-text"></p>
+        </div>
+
+        <div class="batch-grid" id="batch-grid"></div>
       </div>
 
       <div class="card" id="card-progress" hidden>
@@ -108,6 +145,7 @@
         </div>
 
         <div class="progress-track"><div class="progress-bar" id="progress-bar"></div></div>
+        <p class="retry-line" id="progress-retry" hidden></p>
 
         <ol class="stepper" id="stepper">
           <li data-step="transcript">
@@ -170,6 +208,9 @@
               <label class="field">
                 <span class="label">Tags (cách nhau dấu phẩy)</span>
                 <input id="edit-tags" placeholder="true crime, courtroom, viral">
+                <select id="tag-picker">
+                  <option value="">+ Thêm tag có sẵn trên site</option>
+                </select>
               </label>
               <label class="field">
                 <span class="label">Danh mục</span>

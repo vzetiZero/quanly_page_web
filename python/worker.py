@@ -70,8 +70,16 @@ if COOKIES_FILE and not os.path.isfile(COOKIES_FILE):
     COOKIES_FILE = None
 
 JOBS: dict[str, dict] = {}
+BATCHES: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
-EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="job")
+JOB_WORKERS = max(1, min(8, int(os.getenv("JOB_WORKERS", "4") or 4)))
+MAX_BATCH_URLS = max(1, min(100, int(os.getenv("BATCH_MAX_URLS", "40") or 40)))
+EXECUTOR = ThreadPoolExecutor(max_workers=JOB_WORKERS, thread_name_prefix="job")
+
+# 0 = thử lại không giới hạn cho tới khi AI trả về bài hợp lệ.
+AI_MAX_ATTEMPTS = max(0, int(os.getenv("AI_MAX_ATTEMPTS", "0") or 0))
+AI_RETRY_BASE_SECONDS = max(0.5, float(os.getenv("AI_RETRY_BASE_SECONDS", "2") or 2))
+AI_RETRY_MAX_SECONDS = max(5.0, float(os.getenv("AI_RETRY_MAX_SECONDS", "45") or 45))
 
 app = FastAPI(title="News247US Worker", version="1.0.0")
 
@@ -90,6 +98,18 @@ class AnalyzeRequest(BaseModel):
     length: str = "standard"
     instructions: str = ""
     categories: list[dict] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    ai: AIConfig
+
+
+class BatchRequest(BaseModel):
+    urls: list[str] = Field(default_factory=list)
+    language: str = "en"
+    tone: str = "neutral"
+    length: str = "standard"
+    instructions: str = ""
+    categories: list[dict] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
     ai: AIConfig
 
 
@@ -177,6 +197,125 @@ def _cleanup_jobs() -> None:
             ordered = sorted(JOBS.items(), key=lambda item: item[1]["created_at"])
             for key, _ in ordered[: len(JOBS) - 60]:
                 JOBS.pop(key, None)
+        stale_batches = [
+            key for key, batch in BATCHES.items() if batch["created_at"] < cutoff
+        ]
+        for key in stale_batches:
+            BATCHES.pop(key, None)
+        if len(BATCHES) > 20:
+            ordered_batches = sorted(BATCHES.items(), key=lambda item: item[1]["created_at"])
+            for key, _ in ordered_batches[: len(BATCHES) - 20]:
+                BATCHES.pop(key, None)
+
+
+def _sleep_cancellable(job_id: str, seconds: float) -> None:
+    end = time.time() + max(0.0, seconds)
+    while True:
+        _ensure_active(job_id)
+        remaining = end - time.time()
+        if remaining <= 0:
+            break
+        time.sleep(min(0.5, remaining))
+    _ensure_active(job_id)
+
+
+def _retry_delay(attempt: int) -> float:
+    delay = AI_RETRY_BASE_SECONDS * (2 ** min(max(attempt - 1, 0), 5))
+    return min(AI_RETRY_MAX_SECONDS, delay) + random.uniform(0, 1)
+
+
+def _produce_article(
+    job_id: str,
+    payload: dict,
+    clean_metadata: dict,
+    transcript: dict,
+    options: dict,
+) -> tuple[dict, dict, int]:
+    """Gọi AI + chuẩn hoá bài; thử lại tới khi có bài hợp lệ (trừ lỗi cấu hình)."""
+    system, user = build_article_prompt(
+        clean_metadata,
+        transcript["text"],
+        options,
+        payload.get("categories") or [],
+        payload.get("tags") or [],
+    )
+    attempt = 0
+    while True:
+        _ensure_active(job_id)
+        attempt += 1
+        try:
+            raw, ai_meta = generate_json(
+                payload["ai"],
+                system,
+                user,
+                temperature=0.7,
+                max_tokens=8192,
+            )
+            article = normalize_article(
+                raw,
+                clean_metadata,
+                options,
+                payload.get("categories") or [],
+                payload.get("tags") or [],
+            )
+            if attempt > 1:
+                logger.info("Job %s produced article after %s AI attempts", job_id, attempt)
+            return article, ai_meta, attempt
+        except ArticleError as exc:
+            error: Exception = exc
+        except AIError as exc:
+            if not getattr(exc, "retryable", True):
+                _update(job_id, attempt=attempt)
+                raise
+            error = exc
+
+        if AI_MAX_ATTEMPTS and attempt >= AI_MAX_ATTEMPTS:
+            _update(job_id, attempt=attempt)
+            raise error
+        delay = _retry_delay(attempt)
+        logger.warning(
+            "Job %s AI attempt %s failed (%ss): %s", job_id, attempt, int(delay), error
+        )
+        _update(
+            job_id,
+            attempt=attempt,
+            stage="analyze",
+            percent=50,
+            message=(
+                f"AI chưa trả bài hợp lệ (lần {attempt}: {str(error)[:140]}). "
+                f"Thử lại sau {int(delay)}s..."
+            ),
+        )
+        _sleep_cancellable(job_id, delay)
+
+
+def _create_article_job(
+    url: str, payload: dict, *, batch_id: str = "", index: int = 0
+) -> str:
+    job_id = uuid.uuid4().hex
+    now = time.time()
+    with JOBS_LOCK:
+        JOBS[job_id] = {
+            "id": job_id,
+            "type": "article",
+            "url": url,
+            "batchId": batch_id,
+            "index": index,
+            "status": "queued",
+            "stage": "queued",
+            "percent": 0,
+            "message": "Đang xếp hàng...",
+            "created_at": now,
+            "updated_at": now,
+            "cancel_requested": False,
+            "attempt": 0,
+            "metadata": None,
+            "transcript": None,
+            "result": None,
+            "error": None,
+        }
+    EXECUTOR.submit(_run_job, job_id, payload)
+    return job_id
 
 
 def _run_job(job_id: str, payload: dict) -> None:
@@ -224,30 +363,18 @@ def _run_job(job_id: str, payload: dict) -> None:
             message=f"Đã lấy {transcript['wordCount']} từ. AI đang phân tích...",
         )
 
-        system, user = build_article_prompt(
-            clean_metadata,
-            transcript["text"],
-            options,
-            payload.get("categories") or [],
-        )
-        raw, ai_meta = generate_json(
-            payload["ai"],
-            system,
-            user,
-            temperature=0.7,
-            max_tokens=8192,
+        article, ai_meta, attempts = _produce_article(
+            job_id, payload, clean_metadata, transcript, options
         )
         _ensure_active(job_id)
         _update(
             job_id,
+            attempt=attempts,
             stage="write",
             percent=84,
             message="Đang hoàn thiện và kiểm tra bài viết...",
         )
 
-        article = normalize_article(
-            raw, clean_metadata, options, payload.get("categories") or []
-        )
         _ensure_active(job_id)
         _update(
             job_id,
@@ -259,7 +386,7 @@ def _run_job(job_id: str, payload: dict) -> None:
                 "metadata": clean_metadata,
                 "transcript": transcript,
                 "article": article,
-                "ai": ai_meta,
+                "ai": {**ai_meta, "attempts": attempts},
             },
         )
     except JobCancelled:
@@ -702,24 +829,6 @@ def analyze(request: AnalyzeRequest) -> dict:
     url = _validate_url(request.url)
     _cleanup_jobs()
 
-    job_id = uuid.uuid4().hex
-    now = time.time()
-    with JOBS_LOCK:
-        JOBS[job_id] = {
-            "id": job_id,
-            "status": "queued",
-            "stage": "queued",
-            "percent": 0,
-            "message": "Đang xếp hàng...",
-            "created_at": now,
-            "updated_at": now,
-            "cancel_requested": False,
-            "metadata": None,
-            "transcript": None,
-            "result": None,
-            "error": None,
-        }
-
     payload = {
         "url": url,
         "language": request.language,
@@ -727,10 +836,144 @@ def analyze(request: AnalyzeRequest) -> dict:
         "length": request.length,
         "instructions": request.instructions,
         "categories": request.categories,
+        "tags": request.tags,
         "ai": request.ai.model_dump(),
     }
-    EXECUTOR.submit(_run_job, job_id, payload)
+    job_id = _create_article_job(url, payload)
     return {"jobId": job_id}
+
+
+@app.post("/batch")
+def analyze_batch(request: BatchRequest) -> dict:
+    _cleanup_jobs()
+
+    urls: list[str] = []
+    invalid: list[str] = []
+    seen: set[str] = set()
+    for raw in request.urls:
+        candidate = (raw or "").strip()
+        if not candidate:
+            continue
+        try:
+            candidate = _validate_url(candidate)
+        except HTTPException:
+            invalid.append(candidate)
+            continue
+        key = candidate.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        urls.append(candidate)
+
+    if not urls:
+        raise HTTPException(status_code=400, detail="Không có link video hợp lệ trong danh sách.")
+    if len(urls) > MAX_BATCH_URLS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Mỗi lần chỉ nhận tối đa {MAX_BATCH_URLS} link (đang có {len(urls)}).",
+        )
+
+    batch_id = uuid.uuid4().hex
+    items: list[dict] = []
+    for index, url in enumerate(urls, 1):
+        payload = {
+            "url": url,
+            "language": request.language,
+            "tone": request.tone,
+            "length": request.length,
+            "instructions": request.instructions,
+            "categories": request.categories,
+            "tags": request.tags,
+            "ai": request.ai.model_dump(),
+        }
+        job_id = _create_article_job(url, payload, batch_id=batch_id, index=index)
+        items.append({"index": index, "url": url, "jobId": job_id})
+
+    with JOBS_LOCK:
+        BATCHES[batch_id] = {
+            "id": batch_id,
+            "created_at": time.time(),
+            "items": items,
+        }
+
+    return {
+        "batchId": batch_id,
+        "total": len(items),
+        "concurrency": JOB_WORKERS,
+        "invalid": invalid,
+        "items": items,
+    }
+
+
+@app.get("/batch/{batch_id}")
+def get_batch(batch_id: str) -> dict:
+    with JOBS_LOCK:
+        batch = BATCHES.get(batch_id)
+        if not batch:
+            raise HTTPException(status_code=404, detail="Không tìm thấy batch.")
+        meta_items = list(batch["items"])
+
+    counts = {"queued": 0, "running": 0, "done": 0, "error": 0, "cancelled": 0}
+    items: list[dict] = []
+    percent_total = 0.0
+    for meta in meta_items:
+        with JOBS_LOCK:
+            job = JOBS.get(meta["jobId"])
+            snapshot = copy.deepcopy(job) if job else None
+        if snapshot is None:
+            snapshot = {
+                "id": meta["jobId"],
+                "status": "error",
+                "stage": "error",
+                "percent": 100,
+                "message": "Mất job",
+                "error": "Job không còn trong bộ nhớ worker (worker có thể đã khởi động lại).",
+            }
+        snapshot["index"] = meta["index"]
+        snapshot["url"] = meta["url"]
+        status = str(snapshot.get("status") or "queued")
+        if status not in counts:
+            status = "queued"
+        counts[status] += 1
+        percent_total += float(snapshot.get("percent") or 0)
+        items.append(snapshot)
+
+    total = len(items)
+    active = counts["queued"] + counts["running"]
+    return {
+        "id": batch_id,
+        "status": "running" if active else "done",
+        "total": total,
+        "percent": round(percent_total / total) if total else 0,
+        "counts": counts,
+        "concurrency": JOB_WORKERS,
+        "items": items,
+    }
+
+
+@app.post("/batch/{batch_id}/cancel")
+def cancel_batch(batch_id: str) -> dict:
+    with JOBS_LOCK:
+        batch = BATCHES.get(batch_id)
+        if not batch:
+            raise HTTPException(status_code=404, detail="Không tìm thấy batch.")
+
+        cancelled = 0
+        for meta in batch["items"]:
+            job = JOBS.get(meta["jobId"])
+            if not job or job.get("status") in ("done", "error", "cancelled"):
+                continue
+            job["cancel_requested"] = True
+            job["message"] = "Đang huỷ..."
+            job["updated_at"] = time.time()
+            cancelled += 1
+
+    return {
+        "ok": cancelled > 0,
+        "id": batch_id,
+        "cancelled": cancelled,
+        "message": "Đã gửi yêu cầu huỷ." if cancelled else "Không còn job nào đang chạy.",
+    }
 
 
 @app.get("/jobs/{job_id}")

@@ -23,6 +23,14 @@ const state = {
   activeTab: 'content',
   stage: 'queued',
   previewTimer: null,
+  batchId: null,
+  batchTimer: null,
+  batchItems: [],
+  batchPolls: 0,
+  batchRunning: false,
+  batchTotal: 0,
+  batchCollapsed: false,
+  batchActiveIndex: null,
   fbConfig: null,
   fbHistory: [],
   fbJobId: null,
@@ -40,6 +48,7 @@ async function init() {
   await Promise.allSettled([
     loadHealth(),
     loadCategories(),
+    loadTags(),
     loadHistory(),
     loadFacebookConfig(),
     loadFbHistory()
@@ -83,16 +92,48 @@ async function api(path, options = {}) {
 
 /* ---------- Boot ---------- */
 
+/* Server Express nghe cổng trước khi uvicorn nạp xong fastapi/yt-dlp,
+   nên python.ok=false lúc boot thường là worker chưa kịp dậy, không phải lỗi. */
+async function waitForWorker(attempts = 8, delayMs = 1500) {
+  for (let i = 0; i < attempts; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    try {
+      const health = await api('/health');
+      if (health.python && health.python.ok) return true;
+    } catch {
+      // worker chưa nhận kết nối, thử lại
+    }
+  }
+  return false;
+}
+
 async function loadHealth() {
   try {
     const health = await api('/health');
     state.config = health.config;
     applyConfigToForm();
     if (health.python && !health.python.ok) {
-      toast('Python worker chưa chạy. Phân tích video sẽ không hoạt động.', 'bad');
+      if (!(await waitForWorker())) {
+        toast('Python worker chưa chạy. Phân tích video sẽ không hoạt động.', 'bad');
+      }
     }
   } catch (err) {
     toast(err.message, 'bad');
+  }
+}
+
+/* API site chỉ nhận tag ID đã có, nên gợi ý đúng các tag đang tồn tại. */
+async function loadTags() {
+  try {
+    const items = await api('/tags');
+    const picker = $('#tag-picker');
+    if (!picker) return;
+    const options = (Array.isArray(items) ? items : [])
+      .filter((tag) => tag && tag.name)
+      .map((tag) => `<option value="${escapeHtml(tag.name)}">${escapeHtml(tag.name)}</option>`);
+    picker.innerHTML = '<option value="">+ Thêm tag có sẵn trên site</option>' + options.join('');
+  } catch (err) {
+    console.warn('[tags]', err);
   }
 }
 
@@ -992,6 +1033,17 @@ function bindEvents() {
   });
   $('#btn-cancel-job').addEventListener('click', cancelAllJobs);
   $('#btn-retry').addEventListener('click', () => startAnalyze());
+  $('#btn-batch').addEventListener('click', startBatch);
+  $('#btn-batch-cancel').addEventListener('click', () => cancelBatch());
+  $('#btn-batch-hide').addEventListener('click', () => {
+    state.batchCollapsed = !state.batchCollapsed;
+    renderBatchVisibility();
+  });
+  $('#btn-batch-clear').addEventListener('click', () => {
+    $('#input-urls').value = '';
+    updateBatchCount();
+  });
+  $('#input-urls').addEventListener('input', updateBatchCount);
 
   $('#edit-title').addEventListener('input', () => {
     if (!state.slugTouched) {
@@ -1018,6 +1070,21 @@ function bindEvents() {
   $('#btn-check-visibility').addEventListener('click', () => checkVisibility(true));
 
   $('#btn-upload-image').addEventListener('click', () => $('#file-image').click());
+  $('#tag-picker').addEventListener('change', (event) => {
+    const name = event.target.value;
+    event.target.value = '';
+    if (!name) return;
+    const current = splitTags();
+    if (current.some((tag) => tag.toLowerCase() === name.toLowerCase())) {
+      toast('Tag này đã có trong danh sách.', 'bad');
+      return;
+    }
+    if (current.length >= 8) {
+      toast('Tối đa 8 tag.', 'bad');
+      return;
+    }
+    $('#edit-tags').value = [...current, name].join(', ');
+  });
   $('#file-image').addEventListener('change', (event) => {
     const file = event.target.files && event.target.files[0];
     if (file) uploadImage(file);
@@ -1151,6 +1218,7 @@ function resetForNewJob() {
   resetFacebookPanel();
   $('#publish-result').hidden = true;
   $('#progress-error').hidden = true;
+  $('#progress-retry').hidden = true;
   $('#transcript-text').textContent = '';
   $('#transcript-words').textContent = '';
   $('#progress-bar').style.width = '0%';
@@ -1206,6 +1274,16 @@ function renderJob(job) {
   if (job.status === 'error' && job.error) {
     showProgressError(job.error);
   }
+
+  const retry = $('#progress-retry');
+  if (retry) {
+    const attempt = Number(job.attempt) || 0;
+    const active = job.status === 'running' || job.status === 'queued';
+    retry.hidden = !(active && attempt > 0);
+    retry.textContent = retry.hidden
+      ? ''
+      : `AI đã thử ${attempt} lần — hệ thống tự thử lại cho tới khi có bài hợp lệ.`;
+  }
 }
 
 function setProgress(percent, message, stage) {
@@ -1233,6 +1311,8 @@ function showProgressError(message) {
   const box = $('#progress-error');
   $('#progress-error-text').textContent = message;
   box.hidden = false;
+  const retry = $('#progress-retry');
+  if (retry) retry.hidden = true;
   setAnalyzeBusy(false);
 }
 
@@ -1295,23 +1375,34 @@ async function cancelAllJobs() {
   if (state.jobId) ids.push(state.jobId);
   if (state.fbJobId) ids.push(state.fbJobId);
   const unique = [...new Set(ids)];
-  if (!unique.length) {
+  const batchId = state.batchRunning ? state.batchId : null;
+  if (!unique.length && !batchId) {
     toast('Không có tiến trình nào đang chạy.', 'bad');
     return;
   }
 
   $('#progress-message').textContent = 'Đang huỷ...';
   $('#fb-message').textContent = 'Đang huỷ...';
+  if (batchId) $('#batch-summary').textContent = 'Đang huỷ danh sách...';
 
   let failed = 0;
-  await Promise.all(unique.map(async (id) => {
+  const tasks = unique.map(async (id) => {
     try {
       await api(`/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
     } catch (err) {
       failed += 1;
       console.warn('[cancel]', err);
     }
-  }));
+  });
+  if (batchId) {
+    tasks.push(
+      api(`/batch/${encodeURIComponent(batchId)}/cancel`, { method: 'POST' }).catch((err) => {
+        failed += 1;
+        console.warn('[cancel]', err);
+      })
+    );
+  }
+  await Promise.all(tasks);
 
   if (failed) toast('Một số tiến trình không huỷ được.', 'bad');
   else toast('Đã gửi yêu cầu huỷ.', 'ok');
@@ -1321,6 +1412,422 @@ function setAnalyzeBusy(busy) {
   const button = $('#btn-analyze');
   button.disabled = busy;
   button.textContent = busy ? 'Đang xử lý...' : 'Phân tích & viết bài';
+}
+
+/* ---------- Batch analyze ---------- */
+
+const BATCH_STATUS_LABELS = {
+  queued: 'Đang chờ',
+  running: 'Đang chạy',
+  done: 'Đã có bài',
+  error: 'Lỗi',
+  cancelled: 'Đã huỷ'
+};
+
+function extractUrlList(text) {
+  const tokens = String(text || '').split(/[\s,;]+/).filter(Boolean);
+  const urls = [];
+  const seen = new Set();
+  for (const token of tokens) {
+    let url = token.replace(/^[\s"'<(]+|[\s"'),.;>]+$/g, '');
+    if (!/^https?:\/\//i.test(url)) {
+      if (/^(www\.)?(youtube\.com|youtu\.be|m\.youtube\.com)\//i.test(url)) {
+        url = `https://${url}`;
+      } else {
+        continue;
+      }
+    }
+    try {
+      new URL(url);
+    } catch {
+      continue;
+    }
+    const key = url.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    urls.push(url);
+  }
+  return urls;
+}
+
+function youtubeThumb(url) {
+  const match = String(url || '').match(
+    /(?:youtu\.be\/|v=|shorts\/|embed\/|live\/)([\w-]{11})/
+  );
+  return match ? `https://i.ytimg.com/vi/${match[1]}/mqdefault.jpg` : '';
+}
+
+function updateBatchCount() {
+  const counter = $('#batch-count');
+  if (!counter) return;
+  const count = extractUrlList($('#input-urls').value).length;
+  counter.textContent = count ? `${count} link hợp lệ` : '';
+}
+
+function setBatchButtonBusy(busy) {
+  const button = $('#btn-batch');
+  if (!button) return;
+  button.disabled = busy;
+  button.textContent = busy ? 'Đang chạy danh sách...' : 'Phân tích hàng loạt';
+}
+
+function renderBatchVisibility() {
+  const card = $('#card-batch');
+  if (!card || card.hidden) return;
+  const collapsed = Boolean(state.batchCollapsed);
+  $('#batch-grid').hidden = collapsed;
+  const track = card.querySelector('.progress-track');
+  if (track) track.hidden = collapsed;
+  const button = $('#btn-batch-hide');
+  if (button) button.textContent = collapsed ? 'Mở rộng' : 'Thu nhỏ';
+}
+
+function updateBatchCancelButton() {
+  const button = $('#btn-batch-cancel');
+  if (button) button.hidden = !state.batchRunning;
+}
+
+function showBatchError(message) {
+  $('#batch-error-text').textContent = message;
+  $('#batch-error').hidden = false;
+}
+
+async function startBatch() {
+  const urls = extractUrlList($('#input-urls').value);
+  if (!urls.length) {
+    toast('Dán ít nhất một link YouTube (mỗi dòng một link).', 'bad');
+    return;
+  }
+  if (!state.config || !state.config.hasGeminiKey) {
+    toast('Chưa cấu hình Gemini API key.', 'bad');
+    openSettings();
+    return;
+  }
+  if (state.batchRunning) {
+    const ok = window.confirm(
+      'Danh sách trước vẫn đang chạy. Huỷ danh sách đó và bắt đầu danh sách mới?'
+    );
+    if (!ok) return;
+    await cancelBatch({ silent: true });
+  }
+
+  const preferredOption = $('#select-category').selectedOptions[0];
+  let instructions = $('#input-instructions').value.trim();
+  if (preferredOption && preferredOption.value) {
+    instructions = [instructions, `Preferred site category: ${preferredOption.textContent}`]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  clearTimeout(state.batchTimer);
+  state.batchId = null;
+  state.batchItems = [];
+  state.batchPolls = 0;
+  state.batchRunning = true;
+  state.batchTotal = urls.length;
+  state.batchCollapsed = false;
+  state.batchActiveIndex = null;
+
+  const card = $('#card-batch');
+  card.hidden = false;
+  $('#batch-grid').innerHTML = '';
+  $('#batch-error').hidden = true;
+  $('#batch-bar').style.width = '0%';
+  $('#batch-badge').textContent = `0/${urls.length}`;
+  $('#batch-badge').classList.remove('published');
+  $('#batch-summary').textContent = `Đang gửi ${urls.length} video tới worker...`;
+  updateBatchCancelButton();
+  renderBatchVisibility();
+  setBatchButtonBusy(true);
+  card.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
+
+  try {
+    const data = await api('/batch', {
+      method: 'POST',
+      body: {
+        urls,
+        language: $('#select-language').value,
+        tone: $('#select-tone').value,
+        length: $('#select-length').value,
+        instructions
+      }
+    });
+    state.batchId = data.batchId;
+    state.batchTotal = data.total || urls.length;
+    if ((data.invalid || []).length) {
+      toast(`Đã bỏ qua ${data.invalid.length} link không hợp lệ.`, 'bad');
+    }
+    pollBatch();
+  } catch (err) {
+    state.batchRunning = false;
+    setBatchButtonBusy(false);
+    updateBatchCancelButton();
+    showBatchError(err.message);
+    toast(err.message, 'bad');
+  }
+}
+
+async function pollBatch() {
+  if (!state.batchId) return;
+  clearTimeout(state.batchTimer);
+  try {
+    const data = await api(`/batch/${encodeURIComponent(state.batchId)}`);
+    state.batchPolls = 0;
+    state.batchItems = data.items || [];
+    state.batchTotal = data.total || state.batchItems.length;
+    renderBatch(data);
+    if (data.status === 'done') {
+      onBatchFinished(data);
+      return;
+    }
+    state.batchTimer = setTimeout(pollBatch, 1800);
+  } catch (err) {
+    state.batchPolls += 1;
+    if (state.batchPolls < 4) {
+      state.batchTimer = setTimeout(pollBatch, 2600);
+    } else {
+      state.batchRunning = false;
+      setBatchButtonBusy(false);
+      updateBatchCancelButton();
+      showBatchError(err.message);
+      toast(err.message, 'bad');
+    }
+  }
+}
+
+function renderBatch(data) {
+  const items = Array.isArray(data.items) ? data.items : [];
+  const counts = data.counts || {};
+  const done = counts.done || 0;
+  const failed = counts.error || 0;
+  const cancelled = counts.cancelled || 0;
+  const running = counts.running || 0;
+  const queued = counts.queued || 0;
+  const total = data.total || items.length;
+  const finished = done + failed + cancelled;
+
+  const badge = $('#batch-badge');
+  badge.textContent = `${finished}/${total}`;
+  badge.classList.toggle('published', total > 0 && finished === total && failed === 0);
+
+  const parts = [`${done} bài xong`];
+  if (running) parts.push(`${running} đang chạy`);
+  if (queued) parts.push(`${queued} chờ`);
+  if (failed) parts.push(`${failed} lỗi`);
+  if (cancelled) parts.push(`${cancelled} đã huỷ`);
+  $('#batch-summary').textContent =
+    `${parts.join(' · ')} · song song ${data.concurrency || 4} luồng`;
+
+  $('#batch-bar').style.width = `${Math.min(100, Math.max(0, Number(data.percent) || 0))}%`;
+
+  for (const item of items) {
+    updateBatchCard(ensureBatchCard(item), item);
+  }
+  updateBatchCancelButton();
+  renderBatchVisibility();
+}
+
+function ensureBatchCard(item) {
+  const grid = $('#batch-grid');
+  const existing = grid.querySelector(`[data-index="${item.index}"]`);
+  if (existing) return existing;
+
+  const card = document.createElement('article');
+  card.className = 'batch-card';
+  card.dataset.index = String(item.index);
+
+  const thumb = document.createElement('div');
+  thumb.className = 'batch-thumb';
+  const image = document.createElement('img');
+  image.alt = '';
+  image.loading = 'lazy';
+  const index = document.createElement('span');
+  index.className = 'batch-index';
+  index.textContent = `#${item.index}`;
+  const status = document.createElement('span');
+  status.className = 'batch-pill queued';
+  status.textContent = BATCH_STATUS_LABELS.queued;
+  thumb.append(image, index, status);
+
+  const body = document.createElement('div');
+  body.className = 'batch-card-body';
+  const title = document.createElement('div');
+  title.className = 'batch-card-title';
+  const url = document.createElement('div');
+  url.className = 'batch-card-url';
+  const track = document.createElement('div');
+  track.className = 'progress-track';
+  const bar = document.createElement('div');
+  bar.className = 'progress-bar';
+  track.appendChild(bar);
+  const message = document.createElement('div');
+  message.className = 'batch-card-message';
+  const error = document.createElement('div');
+  error.className = 'batch-card-error';
+  error.hidden = true;
+  const foot = document.createElement('div');
+  foot.className = 'batch-card-foot';
+
+  body.append(title, url, track, message, error, foot);
+  card.append(thumb, body);
+  card._refs = { image, status, title, url, bar, message, error, foot };
+  grid.appendChild(card);
+  return card;
+}
+
+function updateBatchCard(card, item) {
+  const refs = card._refs;
+  if (!refs) return;
+  const status = BATCH_STATUS_LABELS[item.status] ? item.status : 'queued';
+  const previousStatus = card.dataset.status;
+  const article = item.result && item.result.article;
+
+  card.dataset.status = status;
+  card.classList.toggle('active', Number(state.batchActiveIndex) === Number(item.index));
+
+  const thumb = (item.metadata && item.metadata.thumbnail) || youtubeThumb(item.url);
+  if (thumb && refs.image.dataset.src !== thumb) {
+    refs.image.src = thumb;
+    refs.image.dataset.src = thumb;
+  }
+
+  refs.status.textContent = BATCH_STATUS_LABELS[status];
+  refs.status.className = `batch-pill ${status}`;
+
+  refs.title.textContent =
+    (article && article.title) ||
+    (item.metadata && item.metadata.title) ||
+    `Video ${item.index}`;
+  refs.url.textContent = item.url || '';
+  refs.url.title = item.url || '';
+
+  const percent = Math.min(100, Math.max(0, Number(item.percent) || 0));
+  refs.bar.style.width = `${percent}%`;
+  refs.bar.style.background =
+    status === 'error'
+      ? 'linear-gradient(90deg, #f87171, #dc2626)'
+      : status === 'done'
+        ? 'linear-gradient(90deg, #22c55e, #0f766e)'
+        : '';
+
+  let message = item.message || '';
+  const attempt = Number(item.attempt) || 0;
+  if (status === 'done' && article) {
+    const parts = [`${article.word_count || 0} từ`];
+    if (article.category) parts.push(article.category);
+    if (attempt > 1) parts.push(`AI thử lại ${attempt - 1} lần`);
+    message = parts.join(' · ');
+  } else if (status === 'running' && attempt > 0) {
+    message = `${message} · AI đã thử ${attempt} lần`;
+  } else if (status === 'queued') {
+    message = 'Đang chờ tới lượt...';
+  }
+  refs.message.textContent = message;
+
+  refs.error.hidden = !(status === 'error' && item.error);
+  refs.error.textContent = item.error || '';
+
+  if (previousStatus === status) return;
+
+  refs.foot.innerHTML = '';
+  if (status === 'done' && article) {
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'btn btn-mini btn-primary';
+    open.textContent = 'Mở bài';
+    open.addEventListener('click', () => openBatchItem(item));
+    refs.foot.appendChild(open);
+  } else if (status === 'error') {
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'btn btn-mini';
+    retry.textContent = 'Thử lại riêng';
+    retry.addEventListener('click', () => retryBatchItem(item.url));
+    refs.foot.appendChild(retry);
+  } else {
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-mini btn-danger';
+    cancel.textContent = 'Huỷ';
+    cancel.addEventListener('click', () => cancelBatchItem(item));
+    refs.foot.appendChild(cancel);
+  }
+
+  if (item.url) {
+    const link = document.createElement('a');
+    link.className = 'btn btn-mini';
+    link.href = item.url;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = 'Video';
+    refs.foot.appendChild(link);
+  }
+}
+
+function openBatchItem(item) {
+  if (!item || !item.result) return;
+  state.batchActiveIndex = item.index;
+  for (const card of $$('#batch-grid .batch-card')) {
+    card.classList.toggle('active', Number(card.dataset.index) === Number(item.index));
+  }
+  state.lastPayload = { url: item.url || '' };
+  onJobDone({ status: 'done', result: item.result });
+  toast(`Đã mở bài #${item.index} trong trình biên tập.`, 'ok');
+}
+
+function retryBatchItem(url) {
+  if (!url) return;
+  $('#input-url').value = url;
+  startAnalyze();
+}
+
+async function cancelBatchItem(item) {
+  if (!item || !item.id) return;
+  try {
+    await api(`/jobs/${encodeURIComponent(item.id)}/cancel`, { method: 'POST' });
+    toast(`Đã gửi huỷ video #${item.index}.`, 'ok');
+  } catch (err) {
+    toast(err.message, 'bad');
+  }
+}
+
+async function cancelBatch({ silent = false } = {}) {
+  if (!state.batchId) return;
+  clearTimeout(state.batchTimer);
+  try {
+    const result = await api(`/batch/${encodeURIComponent(state.batchId)}/cancel`, {
+      method: 'POST'
+    });
+    if (!silent) toast(result.message || 'Đã gửi yêu cầu huỷ.', 'ok');
+    if (state.batchRunning) state.batchTimer = setTimeout(pollBatch, 1200);
+  } catch (err) {
+    state.batchRunning = false;
+    setBatchButtonBusy(false);
+    updateBatchCancelButton();
+    if (!silent) toast(err.message, 'bad');
+  }
+}
+
+function onBatchFinished(data) {
+  clearTimeout(state.batchTimer);
+  state.batchRunning = false;
+  setBatchButtonBusy(false);
+  updateBatchCancelButton();
+  renderBatch(data);
+
+  const counts = data.counts || {};
+  const done = counts.done || 0;
+  const failed = counts.error || 0;
+  const cancelled = counts.cancelled || 0;
+  const total = data.total || state.batchTotal;
+  if (done) {
+    toast(
+      `Xong ${done}/${total} video. Bấm "Mở bài" trên thẻ để biên tập và đăng.`,
+      failed ? '' : 'ok'
+    );
+  } else {
+    toast(`Không có bài nào hoàn tất (${failed} lỗi, ${cancelled} đã huỷ).`, 'bad');
+  }
 }
 
 /* ---------- Editor ---------- */

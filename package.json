@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "build:exe": "node scripts/build-portable.mjs"
   },
   "engines": {
     "node": ">=18"
@@ -15,5 +16,8 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "multer": "^2.0.1"
+  },
+  "devDependencies": {
+    "postject": "^1.0.0-alpha.6"
   }
 }

@@ -13,6 +13,8 @@ data/facebook-history.json
 data/*.json
 !data/.gitkeep
 downloads/
+dist/
+build/
 *.log
 ghichu.txt
 cookies.txt

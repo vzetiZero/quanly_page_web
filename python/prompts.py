@@ -54,6 +54,7 @@ def build_article_prompt(
     transcript_text: str,
     options: dict,
     categories: list[dict] | None = None,
+    site_tags: list[str] | None = None,
 ) -> tuple[str, str]:
     language = options.get("language", "en")
     language_name = LANGUAGE_NAMES.get(language, "English")
@@ -64,6 +65,8 @@ def build_article_prompt(
     instructions = (options.get("instructions") or "").strip() or "None."
     category_names = [c.get("name", "") for c in (categories or []) if c.get("name")]
     category_line = ", ".join(category_names) if category_names else "not provided"
+    tag_names = [str(t).strip() for t in (site_tags or []) if str(t).strip()]
+    tag_line = ", ".join(tag_names) if tag_names else "not provided"
 
     duration = metadata.get("duration")
     if isinstance(duration, (int, float)) and duration > 0:
@@ -81,6 +84,7 @@ URL: {metadata.get('webpage_url') or ''}
 Description: {_clip(metadata.get('description') or '', 2500)}
 
 SITE CATEGORIES (choose one name exactly, or an empty string): {category_line}
+SITE TAGS (copy 2-5 names exactly as written here; never invent a new tag; if a topic has no exact tag, choose the closest listed tag instead; use [] only if nothing fits): {tag_line}
 
 OUTPUT OPTIONS
 Language: {language_name}
@@ -96,7 +100,7 @@ Return a single JSON object with exactly these keys:
   "title": "headline, 55-70 characters",
   "permalink": "short-kebab-case-slug-in-english",
   "seo_description": "meta description, 140-160 characters",
-  "tags": ["4 to 8 short English tags"],
+  "tags": ["2 to 5 tags copied exactly from SITE TAGS, or an empty list"],
   "category": "one of the site categories above, or empty string",
   "key_points": ["3 to 5 factual bullet points"],
   "quotes": ["1 to 3 short direct quotes from the transcript"],

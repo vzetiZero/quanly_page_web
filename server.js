@@ -11,7 +11,7 @@ const fbConfig = require('./lib/facebook-config');
 const fbHistory = require('./lib/fb-history');
 const history = require('./lib/history');
 const site = require('./lib/site-api');
-const { slugify, buildContent, normalizeTags } = require('./lib/content');
+const { slugify, parseYouTubeId, buildContent, normalizeTags } = require('./lib/content');
 
 const PORT = Number(process.env.PORT) || 4300;
 const HOST = process.env.HOST || '127.0.0.1';
@@ -62,6 +62,37 @@ function isHttpUrl(value) {
   }
 }
 
+function normalizeUrlList(value) {
+  const parts = Array.isArray(value)
+    ? value
+    : String(value || '').split(/[\s,;]+/);
+  const urls = [];
+  const invalid = [];
+  const seen = new Set();
+  for (const part of parts) {
+    const url = String(part || '').trim();
+    if (!url) continue;
+    if (!isHttpUrl(url)) {
+      invalid.push(url);
+      continue;
+    }
+    const key = url.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    urls.push(url);
+  }
+  return { urls, invalid };
+}
+
+function analyzeOptions(body, cfg) {
+  return {
+    language: ['en', 'vi'].includes(body.language) ? body.language : cfg.language,
+    tone: ['neutral', 'dramatic', 'analytical'].includes(body.tone) ? body.tone : cfg.tone,
+    length: ['short', 'standard', 'long'].includes(body.length) ? body.length : cfg.length,
+    instructions: String(body.instructions || '').slice(0, 1000)
+  };
+}
+
 function siteOrigin() {
   return new URL(site.baseUrl()).origin;
 }
@@ -86,21 +117,56 @@ function buildPostPayload(body) {
   if (!contentHtml) throw httpError(400, 'Thiếu nội dung bài viết.');
 
   const permalink = slugify(body.permalink || title) || `news-${Date.now()}`;
+
+  const youtubeId = parseYouTubeId(body.video_url);
+  const featureImage =
+    String(body.thumbnail_url || '').trim() ||
+    (youtubeId ? `https://i.ytimg.com/vi/${youtubeId}/maxresdefault.jpg` : '');
+  if (!featureImage) {
+    throw httpError(400, 'Bài viết cần có ảnh bìa. Hãy tải ảnh lên hoặc dùng thumbnail YouTube.');
+  }
+
   const { content, warnings } = buildContent({
     contentHtml,
     videoUrl: body.video_url,
-    thumbnailUrl: body.thumbnail_url,
+    thumbnailUrl: featureImage,
     title
   });
 
+  const tags = normalizeTags(body.tags);
   return {
     title,
     content,
     permalink,
+    seoTitle: String(body.seo_title || title).trim().slice(0, 160),
     seoDescription: String(body.seo_description || '').trim().slice(0, 160),
-    tags: normalizeTags(body.tags),
+    seoKeyword: String(body.seokeyword || tags.join(', ')).trim().slice(0, 255),
+    tags,
     categoryId: Number(body.category_id) || undefined,
+    featureImage,
     warnings
+  };
+}
+
+// API site nhận tags là mảng ID (integer[]), còn UI cho nhập tên tag -> tra ID theo tên.
+async function withTagIds(payload) {
+  if (!payload.tags.length) return payload;
+  const items = await site.getTags().catch(() => []);
+  const byName = new Map(
+    items.map((item) => [String(item.name || '').trim().toLowerCase(), Number(item.id)])
+  );
+  const ids = [];
+  const missing = [];
+  for (const name of payload.tags) {
+    const id = byName.get(name.toLowerCase());
+    if (id) ids.push(id);
+    else missing.push(name);
+  }
+  if (!missing.length) return { ...payload, tags: ids };
+  return {
+    ...payload,
+    tags: ids,
+    warnings: [...payload.warnings, `Tag chưa có trên website nên bị bỏ qua: ${missing.join(', ')}.`]
   };
 }
 
@@ -419,6 +485,14 @@ app.post('/api/app/analyze', asyncRoute(async (req, res) => {
     console.warn('[site] Không tải được danh mục:', err.message);
   }
 
+  // Site chỉ nhận tag ID đã tồn tại, nên đưa từ vựng tag vào prompt để AI chọn đúng.
+  let siteTags = [];
+  try {
+    siteTags = await site.getTags();
+  } catch (err) {
+    console.warn('[site] Không tải được tag:', err.message);
+  }
+
   const result = await pyRequest('/analyze', {
     method: 'POST',
     body: {
@@ -432,9 +506,73 @@ app.post('/api/app/analyze', asyncRoute(async (req, res) => {
         : cfg.length,
       instructions: String(body.instructions || '').slice(0, 1000),
       categories: categories.map((item) => ({ id: item.id, name: item.name })),
+      tags: siteTags.map((item) => item.name).filter(Boolean).slice(0, 200),
       ai: config.aiConfig()
     },
     timeout: 25000
+  });
+  res.json(result);
+}));
+
+app.post('/api/app/batch', asyncRoute(async (req, res) => {
+  const body = req.body || {};
+  const { urls, invalid } = normalizeUrlList(body.urls !== undefined ? body.urls : body.url);
+  if (!urls.length) {
+    throw httpError(
+      400,
+      invalid.length
+        ? 'Không có link hợp lệ. Mỗi dòng cần một URL bắt đầu bằng http:// hoặc https://.'
+        : 'Chưa nhập link video nào.'
+    );
+  }
+  if (urls.length > 40) {
+    throw httpError(400, `Mỗi lần chỉ chạy tối đa 40 link (đang có ${urls.length}).`);
+  }
+
+  const cfg = config.get();
+  if (!cfg.geminiApiKey) {
+    throw httpError(400, 'Chưa cấu hình Gemini API key. Mở Cài đặt để nhập.');
+  }
+
+  let categories = [];
+  let siteTags = [];
+  try {
+    categories = await site.getCategories();
+  } catch (err) {
+    console.warn('[site] Không tải được danh mục:', err.message);
+  }
+  try {
+    siteTags = await site.getTags();
+  } catch (err) {
+    console.warn('[site] Không tải được tag:', err.message);
+  }
+
+  const result = await pyRequest('/batch', {
+    method: 'POST',
+    body: {
+      urls,
+      ...analyzeOptions(body, cfg),
+      categories: categories.map((item) => ({ id: item.id, name: item.name })),
+      tags: siteTags.map((item) => item.name).filter(Boolean).slice(0, 200),
+      ai: config.aiConfig()
+    },
+    timeout: 30000
+  });
+
+  res.json({ ok: true, ...result, invalid });
+}));
+
+app.get('/api/app/batch/:id', asyncRoute(async (req, res) => {
+  const batch = await pyRequest(`/batch/${encodeURIComponent(req.params.id)}`, {
+    timeout: 20000
+  });
+  res.json(batch);
+}));
+
+app.post('/api/app/batch/:id/cancel', asyncRoute(async (req, res) => {
+  const result = await pyRequest(`/batch/${encodeURIComponent(req.params.id)}/cancel`, {
+    method: 'POST',
+    timeout: 12000
   });
   res.json(result);
 }));
@@ -458,7 +596,7 @@ app.post('/api/app/preview', asyncRoute(async (req, res) => {
 }));
 
 app.post('/api/app/publish', asyncRoute(async (req, res) => {
-  const payload = buildPostPayload(req.body || {});
+  const payload = await withTagIds(buildPostPayload(req.body || {}));
   const result = await site.publishPost(payload);
 
   res.json({
@@ -474,7 +612,7 @@ app.put('/api/app/posts/:id', asyncRoute(async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) throw httpError(400, 'ID bài viết không hợp lệ.');
 
-  const payload = buildPostPayload(req.body || {});
+  const payload = await withTagIds(buildPostPayload(req.body || {}));
   const result = await site.updatePost({ id, ...payload });
 
   res.json({

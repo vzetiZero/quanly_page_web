@@ -157,7 +157,16 @@ Cấu hình dùng chung cho mọi Page:
 
 Nếu bước AI lỗi, transcript vẫn được giữ lại và có nút **Thử lại** — không phải tải video lại từ đầu.
 
-### 4.1 Sửa hoặc xoá bài đã đăng
+### 4.1 Chạy hàng loạt
+
+Dán danh sách link vào ô **Danh sách link YouTube** (mỗi dòng một link, tối đa 40) rồi bấm **Phân tích hàng loạt**.
+
+- Chạy song song 4 video mặc định (`JOB_WORKERS` trong `.env`, 1–8).
+- Mỗi video có một card riêng: tiến độ, số lần AI thử lại, **Mở bài**, **Thử lại riêng**, **Huỷ**.
+- AI tự thử lại khi lỗi mạng, timeout hoặc trả JSON không hợp lệ cho tới khi có bài đạt yêu cầu. Lỗi cấu hình (sai API key, sai model) dừng ngay để tránh chờ vô ích.
+- Tag do AI chọn được lọc theo đúng danh sách tag đang có trên website; tag không tồn tại bị loại bỏ.
+
+### 4.2 Sửa hoặc xoá bài đã đăng
 
 Bài đã đăng được lưu trong **Lịch sử** kèm `post_id` của website.
 
@@ -165,7 +174,7 @@ Bài đã đăng được lưu trong **Lịch sử** kèm `post_id` của websit
 - **Xoá:** bấm **Xoá** ở bài đã đăng → xác nhận → ứng dụng gọi `DELETE /posts` để xoá trên website, sau đó xoá mục lịch sử.
 - Bài cũ không có `post_id` (tạo trước khi bật tính năng này) chỉ xoá được khỏi lịch sử cục bộ; cần xoá trên admin website.
 
-### 4.2 Đăng Facebook Reels
+### 4.3 Đăng Facebook Reels
 
 Sau khi bài viết được tạo, thẻ **Đăng Facebook Reels** xuất hiện ngay dưới bài viết:
 
