@@ -12,6 +12,7 @@ data/facebook.json
 data/history.json
 data/facebook-history.json
 data/*.json
+data/proxies.txt
 !data/.gitkeep
 downloads/
 dist/

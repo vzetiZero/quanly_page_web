@@ -13,6 +13,7 @@ const fbConfig = require('./lib/facebook-config');
 const fbHistory = require('./lib/fb-history');
 const history = require('./lib/history');
 const site = require('./lib/site-api');
+const proxySettings = require('./lib/proxies');
 const { slugify, parseYouTubeId, buildContent, normalizeTags } = require('./lib/content');
 
 const PORT = Number(process.env.PORT) || 4300;
@@ -318,6 +319,35 @@ app.post('/api/app/site/test', asyncRoute(async (req, res) => {
       role: user.role
     }
   });
+}));
+
+async function proxyWorkerStatus() {
+  if (!(await pythonHealthy())) return null;
+  try {
+    return await pyRequest('/proxies/status', { timeout: 5000 });
+  } catch (err) {
+    return null;
+  }
+}
+
+app.get('/api/app/proxies', asyncRoute(async (req, res) => {
+  res.json({
+    ok: true,
+    proxy: { ...proxySettings.publicInfo(), worker: await proxyWorkerStatus() }
+  });
+}));
+
+app.put('/api/app/proxies', asyncRoute(async (req, res) => {
+  const body = req.body || {};
+  if (body.text !== undefined && typeof body.text !== 'string') {
+    throw httpError(400, 'Danh sách proxy không hợp lệ.');
+  }
+  const proxy = proxySettings.save({
+    enabled: body.enabled === undefined ? undefined : body.enabled === true,
+    cooldownSeconds: body.cooldownSeconds,
+    text: body.text
+  });
+  res.json({ ok: true, proxy: { ...proxy, worker: await proxyWorkerStatus() } });
 }));
 
 function facebookToken(body) {

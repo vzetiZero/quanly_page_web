@@ -1751,6 +1751,7 @@ function bindEvents() {
   });
   $('#btn-test-ai').addEventListener('click', testAI);
   $('#btn-test-site').addEventListener('click', testSite);
+  $('#btn-save-proxies').addEventListener('click', saveProxySettings);
   $('#btn-fb-run').addEventListener('click', startFacebookJob);
   $('#btn-fb-cancel').addEventListener('click', cancelAllJobs);
   $('#fb-source-list').addEventListener('input', updateFacebookUi);
@@ -3381,6 +3382,7 @@ function openSettings() {
   $('#set-gemini-key').value = '';
   $('#set-site-key').value = '';
   updateSettingsHints();
+  loadProxySettings();
 
   for (const id of ['#test-ai-result', '#test-site-result']) {
     const box = $(id);
@@ -3456,6 +3458,66 @@ function updateSettingsHints() {
   $('#set-site-key').placeholder = cfg.hasSiteKey
     ? 'Để trống nếu giữ key hiện tại'
     : 'Dán API key';
+}
+
+function updateProxyHint(proxy) {
+  const hint = $('#set-proxy-hint');
+  if (!hint) return;
+  const cfg = proxy || {};
+  const parts = [`${Number(cfg.count) || 0} proxy trong danh sách`];
+  const worker = cfg.worker;
+  if (worker) {
+    const errors = Array.isArray(worker.errors) ? worker.errors.length : 0;
+    parts.push(`${Number(worker.count) || 0} hợp lệ`);
+    if (errors) parts.push(`${errors} dòng lỗi`);
+    if (worker.blocked) parts.push(`${worker.blocked} đang tạm nghỉ`);
+  } else {
+    parts.push('worker chưa chạy');
+  }
+  hint.textContent = parts.join(' · ');
+}
+
+function renderProxySettings(proxy) {
+  const cfg = proxy || {};
+  $('#set-proxy-enabled').checked = Boolean(cfg.enabled);
+  $('#set-proxy-cooldown').value = cfg.cooldownSeconds || 1800;
+  $('#set-proxy-list').value = cfg.text || '';
+  updateProxyHint(cfg);
+}
+
+async function loadProxySettings() {
+  try {
+    const data = await api('/proxies');
+    renderProxySettings(data.proxy);
+  } catch (err) {
+    const hint = $('#set-proxy-hint');
+    if (hint) hint.textContent = err.message;
+  }
+}
+
+async function saveProxySettings() {
+  const button = $('#btn-save-proxies');
+  const status = $('#proxy-save-status');
+  if (button) button.disabled = true;
+  if (status) status.textContent = 'Đang lưu...';
+  try {
+    const data = await api('/proxies', {
+      method: 'PUT',
+      body: {
+        enabled: $('#set-proxy-enabled').checked,
+        cooldownSeconds: Number($('#set-proxy-cooldown').value) || 1800,
+        text: $('#set-proxy-list').value
+      }
+    });
+    renderProxySettings(data.proxy);
+    if (status) status.textContent = `Đã lưu lúc ${new Date().toLocaleTimeString('vi-VN')}`;
+    toast('Đã lưu cấu hình proxy.', 'ok');
+  } catch (err) {
+    if (status) status.textContent = err.message;
+    toast(err.message, 'bad');
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 async function saveSettings({ silent = false, close = false } = {}) {

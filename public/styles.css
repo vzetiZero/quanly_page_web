@@ -1440,6 +1440,20 @@ select {
   margin-bottom: 8px;
 }
 
+.proxy-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.proxy-toggle input {
+  flex: none;
+}
+
 .test-result {
   margin-top: 9px;
   border-radius: 9px;

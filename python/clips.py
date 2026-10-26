@@ -14,6 +14,8 @@ import imageio_ffmpeg
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
+import proxies
+
 
 class ClipError(Exception):
     """Raised when ffmpeg or the video download fails."""
@@ -67,12 +69,12 @@ def ffmpeg_exe() -> str:
 
 
 def _friendly_download_error(exc: Exception) -> str:
-    message = str(exc)
+    message = proxies.error_summary(exc)
     lower = message.lower()
     if "sign in to confirm" in lower or "not a bot" in lower:
         return (
             "YouTube đang chặn máy này (xác minh bot). Xuất cookies.txt và đặt "
-            "YTDLP_COOKIES_FILE trong .env."
+            "YTDLP_COOKIES_FILE trong .env, hoặc bật proxy trong Cài đặt để đổi IP tải."
         )
     if "requested format" in lower:
         return f"Không tìm được định dạng video phù hợp: {message}"
@@ -115,31 +117,35 @@ def download_video(
             label += f" · {speed / 1024 / 1024:.1f} MB/s"
         progress(percent, label)
 
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "socket_timeout": 30,
-        "retries": 3,
-        "fragment_retries": 3,
-        "concurrent_fragment_downloads": 4,
-        "format": (
-            f"bv*[height<={max_height}][ext=mp4]+ba[ext=m4a]/"
-            f"b[height<={max_height}][ext=mp4]/"
-            f"bv*[height<={max_height}]+ba/"
-            f"b[height<={max_height}]/b"
-        ),
-        "merge_output_format": "mp4",
-        "outtmpl": os.path.join(workdir, "source.%(ext)s"),
-        "ffmpeg_location": ffmpeg,
-        "progress_hooks": [hook],
-    }
-    if cookies_file and os.path.isfile(cookies_file):
-        opts["cookiefile"] = cookies_file
-
-    try:
+    def download(proxy: str | None) -> None:
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "socket_timeout": 30,
+            "retries": 3,
+            "fragment_retries": 3,
+            "concurrent_fragment_downloads": 4,
+            "format": (
+                f"bv*[height<={max_height}][ext=mp4]+ba[ext=m4a]/"
+                f"b[height<={max_height}][ext=mp4]/"
+                f"bv*[height<={max_height}]+ba/"
+                f"b[height<={max_height}]/b"
+            ),
+            "merge_output_format": "mp4",
+            "outtmpl": os.path.join(workdir, "source.%(ext)s"),
+            "ffmpeg_location": ffmpeg,
+            "progress_hooks": [hook],
+        }
+        if cookies_file and os.path.isfile(cookies_file):
+            opts["cookiefile"] = cookies_file
+        if proxy:
+            opts["proxy"] = proxy
         with YoutubeDL(opts) as ydl:
             ydl.download([url])
+
+    try:
+        proxies.run_ytdlp(download)
     except ClipCancelled:
         raise
     except DownloadError as exc:

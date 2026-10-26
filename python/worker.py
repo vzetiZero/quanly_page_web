@@ -46,6 +46,7 @@ from facebook import (  # noqa: E402
     validate_token,
 )
 from prompts import build_article_prompt, build_clip_prompt  # noqa: E402
+import proxies  # noqa: E402
 from transcript import (  # noqa: E402
     TranscriptError,
     fetch_metadata,
@@ -901,6 +902,11 @@ def update_concurrency(payload: dict) -> dict:
     return {"ok": True, "concurrency": _set_job_workers(value)}
 
 
+@app.get("/proxies/status")
+def proxy_status() -> dict:
+    return proxies.status()
+
+
 @app.get("/health")
 def health() -> dict:
     try:
@@ -922,6 +928,7 @@ def health() -> dict:
         "whisper": importlib.util.find_spec("faster_whisper") is not None,
         "whisperEnabled": WHISPER_ENABLED,
         "concurrency": JOB_WORKERS,
+        "proxy": proxies.status(),
     }
 
 

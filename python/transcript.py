@@ -18,6 +18,8 @@ import httpx
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
+import proxies
+
 
 class TranscriptError(Exception):
     """Raised when metadata or a usable transcript cannot be obtained."""
@@ -28,7 +30,7 @@ _WHISPER_MODELS: dict[str, Any] = {}
 _WHISPER_LOCK = threading.Lock()
 
 
-def _base_opts(workdir: str, cookies_file: str | None) -> dict:
+def _base_opts(workdir: str, cookies_file: str | None, proxy: str | None = None) -> dict:
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -40,16 +42,19 @@ def _base_opts(workdir: str, cookies_file: str | None) -> dict:
     }
     if cookies_file and os.path.isfile(cookies_file):
         opts["cookiefile"] = cookies_file
+    if proxy:
+        opts["proxy"] = proxy
     return opts
 
 
 def _friendly_error(exc: Exception) -> str:
-    message = str(exc)
+    message = proxies.error_summary(exc)
     lower = message.lower()
     if "sign in to confirm" in lower or "not a bot" in lower:
         return (
             "YouTube đang chặn máy này (xác minh bot). Hãy xuất cookies.txt từ trình duyệt "
-            "và đặt đường dẫn vào YTDLP_COOKIES_FILE trong file .env."
+            "và đặt đường dẫn vào YTDLP_COOKIES_FILE trong file .env, hoặc bật proxy "
+            "trong Cài đặt để đổi IP tải."
         )
     if "video unavailable" in lower or "private video" in lower:
         return "Video không khả dụng hoặc đang ở chế độ riêng tư."
@@ -59,9 +64,12 @@ def _friendly_error(exc: Exception) -> str:
 
 
 def fetch_metadata(url: str, workdir: str, cookies_file: str | None = None) -> dict:
+    def extract(proxy: str | None) -> dict:
+        with YoutubeDL(_base_opts(workdir, cookies_file, proxy)) as ydl:
+            return ydl.extract_info(url, download=False)
+
     try:
-        with YoutubeDL(_base_opts(workdir, cookies_file)) as ydl:
-            info = ydl.extract_info(url, download=False)
+        info = proxies.run_ytdlp(extract)
     except DownloadError as exc:
         raise TranscriptError(_friendly_error(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - surface a readable message to the UI
@@ -336,19 +344,22 @@ def _download_subs_via_ytdlp(
     is_auto: bool,
     cookies_file: str | None,
 ) -> list[tuple[int, int, str]]:
-    opts = _base_opts(workdir, cookies_file)
-    opts.update(
-        {
-            "skip_download": True,
-            "writesubtitles": not is_auto,
-            "writeautomaticsub": is_auto,
-            "subtitleslangs": [lang],
-            "subtitlesformat": "json3/vtt/best",
-        }
-    )
-    try:
+    def download(proxy: str | None) -> None:
+        opts = _base_opts(workdir, cookies_file, proxy)
+        opts.update(
+            {
+                "skip_download": True,
+                "writesubtitles": not is_auto,
+                "writeautomaticsub": is_auto,
+                "subtitleslangs": [lang],
+                "subtitlesformat": "json3/vtt/best",
+            }
+        )
         with YoutubeDL(opts) as ydl:
             ydl.download([url])
+
+    try:
+        proxies.run_ytdlp(download)
     except DownloadError:
         return []
 
@@ -396,17 +407,20 @@ def _transcribe_with_whisper(
             "(hoặc tắt WHISPER_ENABLED)."
         ) from exc
 
-    audio_opts = _base_opts(workdir, cookies_file)
-    audio_opts.update(
-        {
-            "skip_download": False,
-            "format": "bestaudio/best",
-            "outtmpl": os.path.join(workdir, "audio.%(ext)s"),
-        }
-    )
-    try:
-        with YoutubeDL(audio_opts) as ydl:
+    audio_opts = {
+        "skip_download": False,
+        "format": "bestaudio/best",
+        "outtmpl": os.path.join(workdir, "audio.%(ext)s"),
+    }
+
+    def download_audio(proxy: str | None) -> None:
+        opts = _base_opts(workdir, cookies_file, proxy)
+        opts.update(audio_opts)
+        with YoutubeDL(opts) as ydl:
             ydl.download([url])
+
+    try:
+        proxies.run_ytdlp(download_audio)
     except DownloadError as exc:
         raise TranscriptError(_friendly_error(exc)) from exc
 

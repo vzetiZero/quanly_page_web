@@ -612,6 +612,30 @@
       </section>
 
       <section class="settings-section">
+        <h3>Proxy tải YouTube</h3>
+        <p class="hint">Mỗi dòng một proxy: <code>ip:port:user:pass</code>, <code>user:pass@ip:port</code> hoặc <code>socks5://ip:port</code>. Proxy lỗi hoặc bị YouTube chặn sẽ tạm nghỉ rồi xoay sang proxy kế tiếp. Chỉ áp dụng cho tải video/phụ đề YouTube. Proxy không thay thế cookies.txt: nếu vẫn bị bot-check, hãy đặt <code>YTDLP_COOKIES_FILE</code> trong <code>.env</code>.</p>
+        <label class="proxy-toggle">
+          <input id="set-proxy-enabled" type="checkbox">
+          <span>Bật proxy khi tải YouTube</span>
+        </label>
+        <div class="grid-2">
+          <label class="field">
+            <span class="label">Thời gian tạm nghỉ (giây)</span>
+            <input id="set-proxy-cooldown" type="number" min="60" max="7200" step="60" value="1800">
+          </label>
+        </div>
+        <label class="field">
+          <span class="label">Danh sách proxy</span>
+          <textarea id="set-proxy-list" rows="6" spellcheck="false" placeholder="1.2.3.4:8000:user:pass&#10;user:pass@5.6.7.8:8000&#10;socks5://9.10.11.12:1080"></textarea>
+          <span class="hint" id="set-proxy-hint"></span>
+        </label>
+        <div class="form-actions">
+          <button type="button" class="btn btn-ghost" id="btn-save-proxies">Lưu proxy</button>
+          <span class="muted small" id="proxy-save-status" role="status"></span>
+        </div>
+      </section>
+
+      <section class="settings-section">
         <h3>Mặc định</h3>
         <div class="grid-3">
           <label class="field">
