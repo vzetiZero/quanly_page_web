@@ -8,7 +8,14 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%234f46e5'/%3E%3Cstop offset='1' stop-color='%230d9488'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cpath d='M10 22V10h3l6 8v-8h3v12h-3l-6-8v8z' fill='%23fff'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/styles.css">
 </head>
-<body>
+<body class="license-checking">
+  <section class="license-gate" id="license-gate" aria-labelledby="license-gate-title">
+    <div class="license-gate-card"><div class="brand-mark">N</div><span class="workflow-eyebrow">NEWS247US STUDIO</span><h1 id="license-gate-title">Kích hoạt ứng dụng</h1><p>Nhập license key được cấp để kích hoạt ứng dụng trên thiết bị này.</p>
+      <label class="field"><span class="label">License key</span><input id="license-activate-code" autocomplete="off" placeholder="Nhập key của bạn"></label>
+      <div class="form-actions"><button class="btn btn-primary" id="btn-license-activate" type="button">Kích hoạt</button><span id="license-activate-status" class="muted small" role="status"></span></div>
+      <div class="license-device-note">Mã máy: <code id="license-device-code">Đang tải…</code></div>
+    </div>
+  </section>
   <header class="app-header">
     <div class="wrap header-inner">
       <div class="brand">
@@ -24,27 +31,57 @@
     </div>
   </header>
 
-  <nav class="wrap view-nav" aria-label="Khu vực quản lý">
-    <div class="view-tabs" role="tablist">
-      <button class="view-tab active" id="tab-workspace" type="button" role="tab" aria-selected="true" aria-controls="view-workspace" data-view="workspace">Bài viết</button>
-      <button class="view-tab" id="tab-facebook" type="button" role="tab" aria-selected="false" aria-controls="view-facebook" data-view="facebook">Facebook Page</button>
-    </div>
-  </nav>
+  <div class="workspace-shell">
+  <aside class="app-sidebar" aria-label="Menu quản lý">
+    <div class="sidebar-label">QUẢN LÝ NỘI DUNG</div>
+    <nav class="sidebar-nav" aria-label="Khu vực quản lý">
+      <button class="view-tab active" id="tab-workspace" type="button" role="tab" aria-selected="true" aria-controls="view-workspace" data-view="workspace" data-menu="menu-articles" aria-expanded="true"><span class="nav-icon">▤</span><span class="nav-title">Bài viết</span><span class="nav-chevron">⌄</span></button>
+      <div class="sidebar-submenu is-open" id="menu-articles">
+        <div class="sidebar-submenu-inner">
+          <a class="sidebar-subitem" href="#card-source" data-target="card-source" data-view="workspace">Tạo bài viết</a>
+          <a class="sidebar-subitem" href="#history-list" data-target="history-list" data-view="workspace">Lịch sử đăng</a>
+        </div>
+      </div>
+      <button class="view-tab" id="tab-facebook" type="button" role="tab" aria-selected="false" aria-controls="view-facebook" data-view="facebook-connection" data-menu="menu-facebook" aria-expanded="false"><span class="nav-icon">f</span><span class="nav-title">Facebook Page</span><span class="nav-chevron">⌄</span></button>
+      <div class="sidebar-submenu" id="menu-facebook" aria-hidden="true">
+        <div class="sidebar-submenu-inner">
+          <a class="sidebar-subitem" href="#card-facebook" data-target="card-facebook" data-view="facebook-publish">Đăng Reels</a>
+          <a class="sidebar-subitem" href="#card-fb-history" data-target="card-fb-history" data-view="facebook-history">Lịch sử Reels</a>
+          <button class="sidebar-subitem sidebar-settings-toggle" type="button" aria-expanded="false" aria-controls="menu-page-settings"><span>Cài đặt Page</span><span class="submenu-chevron">⌄</span></button>
+          <div class="sidebar-submenu sidebar-nested" id="menu-page-settings" aria-hidden="true"><div class="sidebar-submenu-inner">
+            <a class="sidebar-subitem" href="#card-fb-connection" data-target="card-fb-connection" data-view="facebook-connection">Kết nối</a>
+            <a class="sidebar-subitem" href="#card-fb-pages" data-target="card-fb-pages" data-view="facebook-pages">Danh sách Page</a>
+            <a class="sidebar-subitem" href="#card-fb-groups" data-target="card-fb-groups" data-view="facebook-groups">Nhóm Page</a>
+          </div></div>
+        </div>
+      </div>
+    </nav>
+    <div class="sidebar-footer"><span class="sidebar-status-dot"></span>Studio quản lý nội dung</div>
+  </aside>
 
   <main class="wrap app-main">
+    <section class="management-page-heading" id="management-page-heading" hidden>
+      <span class="workflow-eyebrow">FACEBOOK PAGE</span>
+      <h1 id="management-page-title"></h1>
+      <p id="management-page-description"></p>
+    </section>
+    <section class="workflow-banner" id="workflow-banner" aria-label="Quy trình xử lý video">
+      <div class="workflow-heading"><span class="workflow-eyebrow">QUY TRÌNH NỘI DUNG</span><h1>Từ video YouTube đến bài báo và Reels</h1><p>Mỗi URL đi qua các bước: phân tích → duyệt và đăng bài → tạo clip và đăng lên Page kèm link bài.</p></div>
+      <ol class="workflow-steps"><li class="is-current"><span>1</span><div><strong>Phân tích</strong><small>Transcript &amp; bài báo</small></div></li><li><span>2</span><div><strong>Đăng bài</strong><small>Lưu link bài viết</small></div></li><li><span>3</span><div><strong>Đăng Reels</strong><small>Clip &amp; link trên Page</small></div></li></ol>
+    </section>
     <div class="layout" id="view-workspace" role="tabpanel" aria-labelledby="tab-workspace">
     <section class="col-main">
-      <div class="card" id="card-source">
+      <div class="card workflow-only" id="card-source">
         <div class="card-head">
           <div class="step-badge">1</div>
           <div class="grow">
             <h2>Chọn video nguồn</h2>
-            <p>Dán một link hoặc cả danh sách link YouTube. Hệ thống lấy transcript, phân tích và viết bài báo tiếng Anh (hoặc tiếng Việt).</p>
+            <p>Nhập một hoặc nhiều URL YouTube, mỗi dòng một video. Hệ thống sẽ tạo bài báo và tiếp tục tới bước đăng Reels cho từng URL.</p>
           </div>
         </div>
 
         <form id="form-source" novalidate>
-          <label class="field">
+          <label class="field single-url-field">
             <span class="label">Link video</span>
             <input id="input-url" type="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off" spellcheck="false">
           </label>
@@ -94,16 +131,14 @@
             <span class="muted small">Video 10–30 phút thường mất 30–90 giây.</span>
           </div>
 
-          <div class="source-divider"><span>hoặc chạy nhiều video cùng lúc</span></div>
-
           <div class="batch-input" id="batch-input">
             <label class="field">
-              <span class="label">Danh sách link YouTube (mỗi dòng một link)</span>
+              <span class="label">URL YouTube (mỗi dòng một video)</span>
               <textarea id="input-urls" rows="4" placeholder="https://www.youtube.com/watch?v=...&#10;https://youtu.be/..." spellcheck="false"></textarea>
-              <span class="hint">Số luồng có thể chỉnh trong cấu hình Facebook Page (1–8). Nếu AI lỗi hoặc chưa trả JSON hợp lệ, hệ thống tự thử lại.</span>
+              <span class="hint">Dán một hoặc nhiều URL, mỗi dòng một video. Mỗi video đi qua cùng quy trình: tạo bài, đăng bài, rồi tạo clip và đăng lên Page kèm link bài viết.</span>
             </label>
             <div class="form-actions">
-              <button class="btn btn-primary" id="btn-batch" type="button">Phân tích hàng loạt</button>
+              <button class="btn btn-primary" id="btn-batch" type="button">Phân tích URL</button>
               <button class="btn btn-ghost btn-mini" id="btn-batch-clear" type="button">Xoá danh sách</button>
               <span class="muted small" id="batch-count"></span>
             </div>
@@ -111,11 +146,11 @@
         </form>
       </div>
 
-      <div class="card" id="card-batch" hidden>
+      <div class="card workflow-only" id="card-batch" hidden>
         <div class="card-head">
-          <div class="step-badge batch-step">N</div>
+              <div class="step-badge batch-step">2</div>
           <div class="grow">
-            <h2>Phân tích hàng loạt</h2>
+                <h2>Tiến trình xử lý URL</h2>
             <p id="batch-summary" role="status">Đang chuẩn bị...</p>
           </div>
           <span class="badge" id="batch-badge">0/0</span>
@@ -134,11 +169,12 @@
 
         <div class="row-actions batch-publish-row">
           <button class="btn btn-primary" id="btn-batch-publish" type="button" disabled>Đăng hàng loạt</button>
+          <button class="btn btn-success" id="btn-batch-workflow" type="button" hidden>Đăng bài &amp; tiếp tục tạo Reels</button>
           <span class="muted small" id="batch-publish-status"></span>
         </div>
       </div>
 
-      <div class="card" id="card-progress" hidden>
+      <div class="card workflow-only" id="card-progress" hidden>
         <div class="card-head">
           <div class="step-badge">2</div>
           <div class="grow">
@@ -179,7 +215,7 @@
         </details>
       </div>
 
-      <div class="card" id="card-result" hidden>
+      <div class="card workflow-only" id="card-result" hidden>
         <div class="card-head">
           <div class="step-badge">3</div>
           <div class="grow">
@@ -309,6 +345,11 @@
         </div>
 
         <div class="fb-config-line" id="fb-summary">Chưa cấu hình Facebook.</div>
+        <label class="field fb-group-run-select">
+          <span class="label">Nhóm Page nhận Reels</span>
+          <select id="fb-group-select"><option value="">Tất cả Page đã chọn</option></select>
+          <span class="hint">Chọn nhóm để đăng tới toàn bộ Page đã gán trong nhóm; chọn tất cả để dùng các Page được tích trong danh sách Page.</span>
+        </label>
         <label class="field">
           <span class="label">Danh sách URL nguồn và link bài viết (mỗi dòng một video)</span>
           <textarea id="fb-source-list" rows="4" placeholder="https://www.youtube.com/watch?v=...&#10;https://www.youtube.com/watch?v=... | https://news247us.../bai-viet"></textarea>
@@ -337,14 +378,10 @@
 
         <div class="fb-results" id="fb-results" hidden></div>
 
-        <details class="fb-history" id="fb-history-box" hidden>
-          <summary>Lần đăng gần đây</summary>
-          <div class="history-list" id="fb-history-list"></div>
-        </details>
       </div>
     </section>
 
-    <aside class="col-side">
+    <aside class="col-side workflow-only">
       <div class="card">
         <div class="card-head small-head">
           <h3>Lịch sử</h3>
@@ -369,7 +406,7 @@
     </div>
 
     <div class="view-facebook" id="view-facebook" role="tabpanel" aria-labelledby="tab-facebook" hidden>
-      <div class="card" id="card-fb-connection">
+      <div class="card" id="card-fb-connection" data-facebook-page="facebook-connection">
         <div class="card-head">
           <div class="step-badge fb-badge">FB</div>
           <div class="grow">
@@ -416,16 +453,18 @@
         <div class="form-actions">
           <button type="button" class="btn btn-ghost" id="btn-fb-test">Kiểm tra token</button>
           <button type="button" class="btn btn-ghost" id="btn-fb-load-pages">Tải danh sách Page</button>
+          <button type="button" class="btn btn-primary" id="btn-fb-save">L&#x1B0;u c&#x1EA5;u h&#xEC;nh Page</button>
+          <span class="muted small" id="fb-connection-status" role="status"></span>
           <span class="muted small">Token và Page được lưu cục bộ trong <code>data/facebook.json</code>.</span>
         </div>
         <div class="test-result" id="test-fb-result" hidden></div>
       </div>
 
-      <div class="card" id="card-fb-pages">
+      <div class="card" id="card-fb-pages" data-facebook-page="facebook-pages">
         <div class="card-head small-head">
           <div class="grow">
             <h3>Danh sách Page</h3>
-            <p>Tick Page muốn nhận clip. Mỗi Page nhận 1 clip ngẫu nhiên mỗi lần đăng.</p>
+            <p>Chọn Page mặc định khi đăng tới tất cả. Nếu chọn nhóm bên dưới, nhóm sẽ quyết định Page nhận clip.</p>
           </div>
           <span class="badge" id="fb-selected-count">Chưa có Page</span>
         </div>
@@ -438,24 +477,62 @@
             </svg>
             <input id="fb-page-search" type="search" placeholder="Tìm Page theo tên, ID hoặc danh mục" autocomplete="off" spellcheck="false">
           </label>
-          <div class="form-actions">
-            <button class="btn btn-mini" id="btn-fb-select-all" type="button">Chọn tất cả</button>
-            <button class="btn btn-mini" id="btn-fb-clear-pages" type="button">Bỏ chọn</button>
-          </div>
         </div>
 
-        <div class="fb-pages" id="fb-pages">
-          <p class="muted small">Chưa tải danh sách Page.</p>
+        <div class="fb-bulk-toolbar">
+          <button class="btn btn-mini" id="btn-fb-select-all" type="button">Ch&#x1ECD;n t&#x1EA5;t c&#x1EA3;</button>
+          <button class="btn btn-mini" id="btn-fb-clear-pages" type="button">B&#x1ECF; ch&#x1ECD;n</button>
+          <label class="fb-bulk-target"><span>Thao t&#xE1;c v&#x1EDB;i Page &#x111;&#xE3; ch&#x1ECD;n</span><select id="fb-bulk-action"><option value="">Ch&#x1ECD;n thao t&#xE1;c</option><option value="group">G&#xE1;n v&#xE0;o nh&#xF3;m</option><option value="all-on">Th&#xEA;m v&#xE0;o ch&#x1EBF; &#x111;&#x1ED9; T&#x1EA5;t c&#x1EA3; Page</option><option value="all-off">Lo&#x1EA1;i kh&#x1ECF;i ch&#x1EBF; &#x111;&#x1ED9; T&#x1EA5;t c&#x1EA3; Page</option></select></label>
+          <label class="fb-bulk-group-wrap" id="fb-bulk-group-wrap" hidden><span>Nh&#xF3;m</span><select id="fb-bulk-group-target"><option value="">Kh&#xF4;ng thu&#x1ED9;c nh&#xF3;m</option></select></label>
+          <button class="btn btn-primary btn-mini" id="btn-fb-assign-group" type="button" disabled>Th&#x1EF1;c hi&#x1EC7;n</button>
+          <span class="muted small" id="fb-bulk-count">Ch&#x1B0;a ch&#x1ECD;n Page</span>
+        </div>
+        <p class="hint fb-table-hint">Ch&#x1ECD;n Page b&#x1EB1;ng checkbox duy nh&#x1EA5;t ho&#x1EB7;c nh&#x1EA5;n gi&#x1EEF; r&#x1ED3;i r&#xEA; qua c&#xE1;c h&#xE0;ng. Sau &#x111;&#xF3; ch&#x1ECD;n thao t&#xE1;c ph&#xED;a tr&#xEA;n.</p>
+        <div class="fb-table-wrap">
+          <table class="fb-page-table">
+            <thead><tr><th>Ch&#x1ECD;n</th><th>Page</th><th>Danh m&#x1EE5;c</th><th>Nh&#xF3;m Page</th><th>Ch&#x1EBF; &#x111;&#x1ED9; t&#x1EA5;t c&#x1EA3;</th></tr></thead>
+            <tbody class="fb-pages" id="fb-pages"><tr><td colspan="5" class="muted small">Chưa tải danh sách Page.</td></tr></tbody>
+          </table>
         </div>
         <p class="fb-empty" id="fb-pages-empty" hidden></p>
 
-        <div class="fb-save-bar">
-          <span class="muted small" id="facebook-status"></span>
-          <button class="btn btn-primary" id="btn-fb-save" type="button">Lưu cấu hình Page</button>
+        <p class="muted small fb-page-status" id="facebook-status" role="status"></p>
+      </div>
+
+      <div class="card" id="card-fb-groups" data-facebook-page="facebook-groups">
+        <div class="card-head small-head">
+          <div class="grow">
+            <h3>Nhóm Page theo chủ đề</h3>
+            <p>Quản lý tên nhóm tại đây. Gán Page vào nhóm trong bảng Danh sách Page.</p>
+          </div>
+          <span class="badge" id="fb-group-count">0 nhóm</span>
         </div>
+        <div class="fb-group-editor">
+          <input id="fb-group-id" type="hidden">
+          <label class="field">
+            <span class="label">Tên nhóm</span>
+            <input id="fb-group-name" maxlength="80" placeholder="Ví dụ: Thể thao, Tin tức, Giải trí">
+          </label>
+          <div class="form-actions">
+            <button class="btn btn-primary" id="btn-fb-group-save" type="button">Tạo nhóm</button>
+            <button class="btn btn-ghost" id="btn-fb-group-cancel" type="button" hidden>Hủy sửa</button>
+            <span class="muted small" id="fb-group-status" role="status"></span>
+          </div>
+        </div>
+        <div class="fb-groups-list" id="fb-groups-list"><p class="muted small">Chưa có nhóm Page.</p></div>
+      </div>
+      <div class="card" id="card-fb-history" data-facebook-page="facebook-history">
+        <div class="card-head small-head"><div class="grow"><h3>Lịch sử Reels</h3><p>Các video Reels đã đăng gần đây.</p></div></div>
+        <details class="fb-history" id="fb-history-box" open>
+          <summary>Lần đăng gần đây</summary>
+          <div class="history-list" id="fb-history-list"></div>
+        </details>
       </div>
     </div>
+
+
   </main>
+  </div>
 
   <dialog id="dialog-settings" class="dialog" aria-labelledby="settings-title">
     <div class="dialog-head">

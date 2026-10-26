@@ -454,10 +454,17 @@ def _strip_hashtags(text: str) -> str:
 
 def _clip_hashtags(value) -> str:
     if isinstance(value, str):
-        value = [value]
-    if not isinstance(value, list):
+        values = re.split(r"\s+(?=#)|[,;\n]+", value)
+    elif isinstance(value, list):
+        values = value
+    else:
         return ""
-    return normalize_hashtags(" ".join(str(item) for item in value))
+    tags = []
+    for item in values:
+        words = re.findall(r"[\w]+", str(item).lstrip("#"), flags=re.UNICODE)
+        if words:
+            tags.append("".join(word[:1].upper() + word[1:] for word in words))
+    return normalize_hashtags(" ".join(tags))
 
 
 def _clip_caption(clip: dict, extra_hashtags: str = "") -> str:

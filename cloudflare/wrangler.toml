@@ -1,0 +1,8 @@
+name = "news247us-license-api"
+main = "worker.js"
+compatibility_date = "2026-10-26"
+
+[[d1_databases]]
+binding = "LICENSES"
+database_name = "news247us-licenses"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"

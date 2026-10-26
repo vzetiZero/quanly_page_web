@@ -344,3 +344,9 @@ Nếu máy yếu và muốn tắt fallback, đặt `WHISPER_ENABLED=0` (khi đó
 - Tự tạo ảnh thumbnail bằng AI.
 - Chọn nhiều giọng văn / template theo từng danh mục.
 - Tự động retry khi Gemini quá tải (429).
+# License system
+
+The app checks an activation against a machine fingerprint and shows only the key-entry gate when the device has no active license. The separate admin website source is in [`key_quanly_toolpage/`](key_quanly_toolpage/). A local development registry lives in the ignored file `data/licenses.json`; license codes are stored as hashes. The current development machine has the permanent `viet` license bound to its machine code.
+
+For issuing licenses to separate customer installations, configure the optional Cloudflare D1 registry described in [`cloudflare/README.md`](cloudflare/README.md). Set `LICENSE_API_URL` on client installs. Keep `LICENSE_ADMIN_TOKEN` only on the admin installation; it grants license creation, changes, revocation and device release.
+

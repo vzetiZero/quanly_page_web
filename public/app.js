@@ -42,8 +42,14 @@ const state = {
   fbPolls: 0,
   fbRunning: false,
   fbResult: null,
-  fbLastStage: ''
+  fbLastStage: '',
+  editingFbGroupId: '',
+  licenseStatus: null,
+  licenseItems: [],
+  editingLicenseId: ''
 };
+
+let fbPageSweep = null;
 
 document.addEventListener('DOMContentLoaded', init);
 
@@ -55,9 +61,48 @@ async function init() {
     loadTags(),
     loadHistory(),
     loadFacebookConfig(),
-    loadFbHistory()
+    loadFbHistory(),
+    loadLicenseStatus()
   ]);
-  if (location.hash === '#facebook') switchView('facebook');
+  if (location.hash === '#facebook' || location.hash === '#facebook-connection') {
+    switchView('facebook-connection');
+    const fbTab = $('#tab-facebook');
+    const fbMenu = $('#menu-facebook');
+    if (fbTab && fbMenu) {
+      fbTab.setAttribute('aria-expanded', 'true');
+      fbMenu.setAttribute('aria-hidden', 'false');
+      fbMenu.classList.add('is-open');
+    }
+  } else if (location.hash.startsWith('#facebook-')) {
+    switchView(location.hash.slice(1));
+    const fbTab = $('#tab-facebook');
+    const fbMenu = $('#menu-facebook');
+    if (fbTab && fbMenu) {
+      fbTab.setAttribute('aria-expanded', 'true');
+      fbMenu.setAttribute('aria-hidden', 'false');
+      fbMenu.classList.add('is-open');
+    }
+  }
+}
+
+async function loadLicenseStatus() {
+  try {
+    state.licenseStatus = await api('/license/status');
+    const status = state.licenseStatus;
+    const code = $('#license-device-code');
+    if (code) code.textContent = status.device.code;
+    const activateStatus = $('#license-activate-status');
+    if (activateStatus) activateStatus.textContent = status.active ? `Đã kích hoạt: ${status.license.name}` : '';
+    const gate = $('#license-gate');
+    if (gate) gate.hidden = status.active;
+    document.body.classList.remove('license-checking');
+    document.body.classList.toggle('license-locked', !status.active);
+  } catch (error) {
+    const status = $('#license-activate-status');
+    if (status) status.textContent = 'Không kết nối được dịch vụ xác thực license. Hãy kiểm tra kết nối mạng.';
+    document.body.classList.remove('license-checking');
+    document.body.classList.add('license-locked');
+  }
 }
 
 /* ---------- API ---------- */
@@ -251,12 +296,25 @@ async function loadFacebookConfig() {
   }
 }
 
+function selectedPagesForGroup(cfg, groupId = '') {
+  const selected = new Set((cfg.selectedPageIds || []).map(String));
+  const group = groupId ? (cfg.groups || []).find((item) => item.id === groupId) : null;
+  if (groupId && !group) return 0;
+  const members = group ? new Set(group.pageIds || []) : null;
+  return (cfg.pages || []).filter((page) =>
+    page.hasToken && (members ? members.has(String(page.id)) : selected.has(String(page.id)))
+  ).length;
+}
+
 function updateFacebookUi() {
   const cfg = state.fbConfig || {};
   const usable = new Set(
     (cfg.pages || []).filter((page) => page.hasToken).map((page) => String(page.id))
   );
-  const selected = (cfg.selectedPageIds || []).filter((id) => usable.has(String(id))).length;
+  const selectedGlobal = (cfg.selectedPageIds || []).filter((id) => usable.has(String(id))).length;
+  renderFbGroupSelect();
+  const groupId = ($('#fb-group-select') && $('#fb-group-select').value) || '';
+  const selected = groupId ? selectedPagesForGroup(cfg, groupId) : selectedGlobal;
   const ready = Boolean(cfg.hasAccessToken && selected);
   const badge = $('#fb-badge');
   const configBadge = $('#fb-config-badge');
@@ -335,7 +393,8 @@ function renderFbHistory() {
   if (!box || !container) return;
   container.innerHTML = '';
   if (!state.fbHistory.length) {
-    box.hidden = true;
+    box.hidden = false;
+    container.innerHTML = '<p class="muted small">Chưa có Reels nào được đăng. Kết quả sẽ xuất hiện tại đây.</p>';
     return;
   }
   box.hidden = false;
@@ -436,6 +495,7 @@ function showFbError(message) {
 
 async function startFacebookJob() {
   const cfg = state.fbConfig || {};
+  const groupId = ($('#fb-group-select') && $('#fb-group-select').value) || '';
   const sources = getFacebookSources();
   if (!sources.length) {
     toast('Dán ít nhất một URL YouTube hợp lệ vào danh sách nguồn.', 'bad');
@@ -446,7 +506,11 @@ async function startFacebookJob() {
     openSettings();
     return;
   }
-  if (!(cfg.selectedPageIds || []).length) {
+  if (groupId && !selectedPagesForGroup(cfg, groupId)) {
+    toast('Nhóm này chưa có Page nào có quyền đăng Reels.', 'bad');
+    return;
+  }
+  if (!selectedPagesForGroup(cfg, groupId)) {
     toast('Chưa chọn Page nào. Mở Cài đặt để chọn Page.', 'bad');
     openSettings();
     return;
@@ -475,7 +539,7 @@ async function startFacebookJob() {
   try {
     const response = await api('/facebook/batches', {
       method: 'POST',
-      body: { sources }
+      body: { sources, groupId }
     });
     state.fbJobIds = (response.jobs || []).map((job) => job.jobId).filter(Boolean);
     if (!state.fbJobIds.length) throw new Error('Worker không tạo được job cho các URL nguồn.');
@@ -834,57 +898,200 @@ function renderFbSettings() {
   $('#set-fb-max-seconds').value = cfg.maxSeconds || 75;
   $('#set-job-workers').value = (state.config && state.config.jobWorkers) || 4;
   renderFbPages(cfg.pages || [], cfg.selectedPageIds || []);
+  renderFbGroups();
+  renderFbGroupSelect();
+}
+
+function renderFbGroups() {
+  const container = $('#fb-groups-list');
+  if (!container) return;
+  container.innerHTML = '';
+  const groups = (state.fbConfig && state.fbConfig.groups) || [];
+  const pages = (state.fbConfig && state.fbConfig.pages) || [];
+  const count = $('#fb-group-count');
+  if (count) count.textContent = `${groups.length} nh\u00f3m`;
+  if (!groups.length) {
+    container.innerHTML = '<p class="muted small">Ch\u01b0a c\u00f3 nh\u00f3m Page.</p>';
+    return;
+  }
+  for (const group of groups) {
+    const row = document.createElement('article');
+    row.className = 'fb-group-row';
+    const title = document.createElement('strong');
+    title.className = 'fb-group-title';
+    title.textContent = group.name;
+    const countLabel = document.createElement('span');
+    countLabel.className = 'fb-group-members-count';
+    const memberCount = pages.filter((page) => (group.pageIds || []).includes(String(page.id))).length;
+    countLabel.textContent = `${memberCount} Page`;
+    const actions = document.createElement('div');
+    actions.className = 'fb-group-actions';
+    for (const [action, label] of [['edit', 'S\u1eeda'], ['delete', 'X\u00f3a']]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = action === 'delete' ? 'btn btn-ghost btn-mini danger-text' : 'btn btn-ghost btn-mini';
+      button.dataset.groupAction = action;
+      button.dataset.groupId = group.id;
+      button.textContent = label;
+      actions.appendChild(button);
+    }
+    row.append(title, countLabel, actions);
+    container.appendChild(row);
+  }
+}
+
+function renderFbGroupSelect() {
+  const select = $('#fb-group-select');
+  if (!select) return;
+  const current = select.value;
+  const groups = (state.fbConfig && state.fbConfig.groups) || [];
+  select.innerHTML = '<option value="">T\u1ea5t c\u1ea3 Page \u0111\u00e3 ch\u1ecdn</option>';
+  for (const group of groups) {
+    const option = document.createElement('option');
+    option.value = group.id;
+    option.textContent = `${group.name} (${(group.pageIds || []).length} Page)`;
+    select.appendChild(option);
+  }
+  if (groups.some((group) => group.id === current)) select.value = current;
+  const bulkSelect = $('#fb-bulk-group-target');
+  if (bulkSelect) {
+    const bulkCurrent = bulkSelect.value;
+    bulkSelect.innerHTML = '<option value="">Kh\u00f4ng thu\u1ed9c nh\u00f3m</option>';
+    for (const group of groups) {
+      const option = document.createElement('option');
+      option.value = group.id;
+      option.textContent = group.name;
+      bulkSelect.appendChild(option);
+    }
+    if (groups.some((group) => group.id === bulkCurrent)) bulkSelect.value = bulkCurrent;
+  }
+}
+
+function resetFbGroupEditor() {
+  state.editingFbGroupId = '';
+  $('#fb-group-id').value = '';
+  $('#fb-group-name').value = '';
+  $('#btn-fb-group-save').textContent = 'T\u1ea1o nh\u00f3m';
+  $('#btn-fb-group-cancel').hidden = true;
+  $('#fb-group-status').textContent = '';
+}
+
+async function saveFbGroups(groups) {
+  const response = await api('/facebook/config', { method: 'PUT', body: { groups } });
+  state.fbConfig = response.config;
+  renderFbGroups();
+  renderFbGroupSelect();
+  renderFbPages(state.fbConfig.pages || [], state.fbConfig.selectedPageIds || []);
+  updateFacebookUi();
+}
+
+async function submitFbGroup() {
+  const name = $('#fb-group-name').value.trim();
+  const status = $('#fb-group-status');
+  if (!name) { status.textContent = 'Nh\u1eadp t\u00ean nh\u00f3m.'; return; }
+  const groups = [...((state.fbConfig && state.fbConfig.groups) || [])];
+  const id = state.editingFbGroupId || `group-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const oldGroup = groups.find((group) => group.id === id);
+  const nextGroup = { id, name, pageIds: oldGroup ? oldGroup.pageIds : [] };
+  const existingIndex = groups.findIndex((group) => group.id === id);
+  if (existingIndex >= 0) groups[existingIndex] = nextGroup;
+  else groups.push(nextGroup);
+  status.textContent = '\u0110ang l\u01b0u nh\u00f3m...';
+  try {
+    await saveFbGroups(groups);
+    resetFbGroupEditor();
+    status.textContent = '\u0110\u00e3 l\u01b0u nh\u00f3m.';
+  } catch (err) { status.textContent = err.message; }
+}
+
+async function onFbGroupAction(event) {
+  const button = event.target.closest('[data-group-action]');
+  if (!button) return;
+  const group = ((state.fbConfig && state.fbConfig.groups) || []).find((item) => item.id === button.dataset.groupId);
+  if (!group) return;
+  if (button.dataset.groupAction === 'edit') {
+    state.editingFbGroupId = group.id;
+    $('#fb-group-id').value = group.id;
+    $('#fb-group-name').value = group.name;
+    $('#btn-fb-group-save').textContent = 'L\u01b0u thay \u0111\u1ed5i';
+    $('#btn-fb-group-cancel').hidden = false;
+    $('#fb-group-status').textContent = '';
+    $('#fb-group-name').focus();
+    return;
+  }
+  if (!window.confirm(`X\u00f3a nh\u00f3m "${group.name}"? C\u00e1c Page v\u1eabn \u0111\u01b0\u1ee3c gi\u1eef nguy\u00ean.`)) return;
+  try {
+    await saveFbGroups((state.fbConfig.groups || []).filter((item) => item.id !== group.id));
+    if (state.editingFbGroupId === group.id) resetFbGroupEditor();
+  } catch (err) { $('#fb-group-status').textContent = err.message; }
 }
 
 function renderFbPages(pages, selectedIds) {
   const container = $('#fb-pages');
   if (!container) return;
   container.innerHTML = '';
+  const allMode = new Set((selectedIds || []).map(String));
+  const groups = (state.fbConfig && state.fbConfig.groups) || [];
   if (!pages.length) {
-    const empty = document.createElement('p');
-    empty.className = 'muted small';
-    empty.textContent = 'Chưa có Page nào. Dán token rồi bấm "Tải danh sách Page".';
-    container.appendChild(empty);
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 5;
+    cell.className = 'muted small';
+    cell.textContent = 'Ch\u01b0a t\u1ea3i danh s\u00e1ch Page.';
+    row.appendChild(cell);
+    container.appendChild(row);
     updateFbSelectionCount();
-    filterFbPages();
     return;
   }
-
-  const selected = new Set((selectedIds || []).map(String));
   for (const page of pages) {
-    const label = document.createElement('label');
-    label.className = 'fb-page-option';
-    label.dataset.search = normalizeSearch(
-      [page.name, page.id, page.category, (page.tasks || []).join(' ')].filter(Boolean).join(' ')
-    );
-
+    const row = document.createElement('tr');
+    row.className = 'fb-page-row';
+    row.dataset.search = normalizeSearch([page.name, page.id, page.category, (page.tasks || []).join(' ')].filter(Boolean).join(' '));
+    const selectCell = document.createElement('td');
+    selectCell.className = 'fb-select-cell';
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
+    checkbox.className = 'fb-page-bulk';
     checkbox.value = page.id;
-    checkbox.checked = selected.has(String(page.id));
-    label.appendChild(checkbox);
-
-    const text = document.createElement('span');
-    text.className = 'fb-page-name';
-    text.textContent = page.name || page.id;
-
-    if (page.category) {
-      const small = document.createElement('small');
-      small.textContent = page.category;
-      text.appendChild(small);
-    }
-
+    checkbox.setAttribute('aria-label', `Ch\u1ecdn ${page.name || page.id}`);
+    selectCell.appendChild(checkbox);
+    const pageCell = document.createElement('td');
+    const title = document.createElement('strong');
+    title.textContent = page.name || page.id;
+    const id = document.createElement('small');
+    id.className = 'fb-page-id';
+    id.textContent = page.id;
+    pageCell.append(title, id);
     if (!page.hasToken) {
-      const warn = document.createElement('em');
-      warn.className = 'page-token';
-      warn.textContent = 'Thiếu token';
-      text.appendChild(warn);
+      const warning = document.createElement('em');
+      warning.className = 'page-token';
+      warning.textContent = 'Thi\u1ebfu token';
+      pageCell.appendChild(warning);
     }
-
-    label.appendChild(text);
-    container.appendChild(label);
+    const categoryCell = document.createElement('td');
+    categoryCell.textContent = page.category || '\u2014';
+    const groupCell = document.createElement('td');
+    const groupSelect = document.createElement('select');
+    groupSelect.className = 'fb-page-group';
+    groupSelect.dataset.pageId = page.id;
+    groupSelect.setAttribute('aria-label', `Nh\u00f3m c\u1ee7a ${page.name || page.id}`);
+    groupSelect.innerHTML = '<option value="">Kh\u00f4ng thu\u1ed9c nh\u00f3m</option>';
+    for (const group of groups) {
+      const option = document.createElement('option');
+      option.value = group.id;
+      option.textContent = group.name;
+      if ((group.pageIds || []).includes(String(page.id))) option.selected = true;
+      groupSelect.appendChild(option);
+    }
+    groupCell.appendChild(groupSelect);
+    const modeCell = document.createElement('td');
+    const mode = document.createElement('span');
+    mode.className = allMode.has(String(page.id)) ? 'fb-mode-badge is-on' : 'fb-mode-badge';
+    mode.textContent = allMode.has(String(page.id)) ? '\u0110ang b\u1eadt' : 'Ch\u01b0a b\u1eadt';
+    modeCell.appendChild(mode);
+    row.append(selectCell, pageCell, categoryCell, groupCell, modeCell);
+    container.appendChild(row);
   }
-
   updateFbSelectionCount();
   filterFbPages();
 }
@@ -892,57 +1099,144 @@ function renderFbPages(pages, selectedIds) {
 function filterFbPages() {
   const input = $('#fb-page-search');
   const query = normalizeSearch(input ? input.value.trim() : '');
-  const rows = $$('#fb-pages .fb-page-option');
+  const rows = $$('#fb-pages .fb-page-row');
   let visible = 0;
-
   for (const row of rows) {
     const match = !query || (row.dataset.search || '').includes(query);
     row.hidden = !match;
     if (match) visible += 1;
   }
-
   const empty = $('#fb-pages-empty');
   if (empty) {
-    if (query && rows.length && !visible) {
-      empty.hidden = false;
-      empty.textContent = `Không có Page nào khớp “${input.value.trim()}”.`;
-    } else {
-      empty.hidden = true;
-      empty.textContent = '';
-    }
+    empty.hidden = !(query && rows.length && !visible);
+    empty.textContent = empty.hidden ? '' : `Kh\u00f4ng c\u00f3 Page n\u00e0o kh\u1edbp "${input.value.trim()}".`;
   }
 }
 
 function updateFbSelectionCount() {
-  const boxes = $$('#fb-pages input[type="checkbox"]');
-  const selected = boxes.filter((box) => box.checked).length;
+  const pageCount = (state.fbConfig && state.fbConfig.pages || []).length;
+  const globalSelected = ((state.fbConfig && state.fbConfig.selectedPageIds) || []).length;
+  const bulkBoxes = $$('#fb-pages .fb-page-bulk');
+  const bulkSelected = bulkBoxes.filter((box) => box.checked).length;
+  for (const row of $$('#fb-pages .fb-page-row')) {
+    const checkbox = $('.fb-page-bulk', row);
+    row.classList.toggle('is-bulk-selected', Boolean(checkbox && checkbox.checked));
+  }
   const badge = $('#fb-selected-count');
   if (badge) {
-    badge.textContent = boxes.length ? `${selected}/${boxes.length} Page đã chọn` : 'Chưa có Page';
-    badge.classList.toggle('published', boxes.length > 0 && selected === boxes.length);
+    badge.textContent = pageCount ? `${globalSelected}/${pageCount} Page \u0111ang b\u1eadt cho ch\u1ebf; \u0111\u1ed9 T\u1ea5t c\u1ea3` : 'Ch\u01b0a c\u00f3 Page';
+    badge.classList.toggle('published', pageCount > 0 && globalSelected === pageCount);
   }
-
   const search = $('#fb-page-search');
-  if (search) search.disabled = !boxes.length;
+  if (search) search.disabled = !pageCount;
   for (const id of ['#btn-fb-select-all', '#btn-fb-clear-pages']) {
     const button = $(id);
-    if (button) button.disabled = !boxes.length;
+    if (button) button.disabled = !pageCount;
   }
+  const bulkCount = $('#fb-bulk-count');
+  if (bulkCount) bulkCount.textContent = bulkSelected ? `${bulkSelected} Page \u0111ang ch\u1ecdn` : 'Ch\u01b0a ch\u1ECDn Page';
+  const action = $('#fb-bulk-action');
+  const groupWrap = $('#fb-bulk-group-wrap');
+  if (groupWrap) groupWrap.hidden = !action || action.value !== 'group';
+  const applyButton = $('#btn-fb-assign-group');
+  if (applyButton) applyButton.disabled = bulkSelected === 0 || !action || !action.value;
 }
 
 function setVisibleFbPages(checked) {
-  for (const row of $$('#fb-pages .fb-page-option')) {
+  for (const row of $$('#fb-pages .fb-page-row')) {
     if (row.hidden) continue;
-    const box = $('input[type="checkbox"]', row);
-    if (box) box.checked = checked;
+    const box = $('.fb-page-bulk', row);
+    if (box) {
+      box.checked = checked;
+      row.classList.toggle('is-bulk-selected', checked);
+    }
   }
   updateFbSelectionCount();
 }
 
 function collectFbSelectedPageIds() {
-  const boxes = $$('#fb-pages input[type="checkbox"]');
-  if (!boxes.length) return ((state.fbConfig && state.fbConfig.selectedPageIds) || []).map(String);
-  return boxes.filter((box) => box.checked).map((box) => box.value);
+  return ((state.fbConfig && state.fbConfig.selectedPageIds) || []).map(String);
+}
+
+async function assignPagesToGroup(pageIds, groupId) {
+  const ids = new Set(pageIds.map(String));
+  const groups = ((state.fbConfig && state.fbConfig.groups) || []).map((group) => ({
+    ...group,
+    pageIds: (group.pageIds || []).filter((id) => !ids.has(String(id)))
+  }));
+  if (groupId) {
+    const target = groups.find((group) => group.id === groupId);
+    if (target) target.pageIds = [...new Set([...target.pageIds, ...ids])];
+  }
+  await saveFbGroups(groups);
+}
+
+async function onFbPageTableChange(event) {
+  const groupSelect = event.target.closest('.fb-page-group');
+  if (groupSelect) {
+    const status = $('#facebook-status');
+    status.textContent = '\u0110ang c\u1eadp nh\u1eadt nh\u00f3m Page...';
+    try {
+      await assignPagesToGroup([groupSelect.dataset.pageId], groupSelect.value);
+      status.textContent = '\u0110\u00e3 c\u1eadp nh\u1eadt nh\u00f3m.';
+    } catch (err) { status.textContent = err.message; }
+    return;
+  }
+  updateFbSelectionCount();
+}
+
+function startFbPageSweep(event) {
+  if (event.button !== 0 || event.target.closest('select, button, a')) return;
+  const row = event.target.closest('.fb-page-row');
+  if (!row) return;
+  const checkbox = $('.fb-page-bulk', row);
+  if (!checkbox) return;
+  event.preventDefault();
+  fbPageSweep = { checked: !checkbox.checked, pointerId: event.pointerId };
+  checkbox.checked = fbPageSweep.checked;
+  row.classList.toggle('is-bulk-selected', checkbox.checked);
+  updateFbSelectionCount();
+}
+
+function continueFbPageSweep(event) {
+  if (!fbPageSweep || event.pointerId !== fbPageSweep.pointerId) return;
+  const element = document.elementFromPoint(event.clientX, event.clientY);
+  const row = element && element.closest('.fb-page-row');
+  if (!row) return;
+  const checkbox = $('.fb-page-bulk', row);
+  if (checkbox && checkbox.checked !== fbPageSweep.checked) {
+    checkbox.checked = fbPageSweep.checked;
+    row.classList.toggle('is-bulk-selected', checkbox.checked);
+    updateFbSelectionCount();
+  }
+}
+
+function endFbPageSweep(event) {
+  if (!fbPageSweep || (event.pointerId !== undefined && event.pointerId !== fbPageSweep.pointerId)) return;
+  fbPageSweep = null;
+}
+
+async function applyBulkPageGroup() {
+  const ids = $$('#fb-pages .fb-page-bulk:checked').map((box) => box.value);
+  const action = $('#fb-bulk-action').value;
+  if (!ids.length || !action) return;
+  const status = $('#facebook-status');
+  status.textContent = '\u0110ang c\u1eadp nh\u1eadt Page...';
+  try {
+    if (action === 'group') {
+      await assignPagesToGroup(ids, $('#fb-bulk-group-target').value);
+    } else {
+      const selected = new Set(collectFbSelectedPageIds());
+      for (const id of ids) action === 'all-on' ? selected.add(id) : selected.delete(id);
+      const response = await api('/facebook/config', { method: 'PUT', body: { selectedPageIds: [...selected] } });
+      state.fbConfig = response.config;
+      renderFbPages(state.fbConfig.pages || [], state.fbConfig.selectedPageIds || []);
+      renderFbGroups();
+      renderFbGroupSelect();
+      updateFacebookUi();
+    }
+    status.textContent = `\u0110\u00e3 c\u1eadp nh\u1eadt ${ids.length} Page.`;
+  } catch (err) { status.textContent = err.message; }
 }
 
 async function testFacebookToken() {
@@ -1024,30 +1318,54 @@ function scrollBehavior() {
 }
 
 function switchView(view) {
-  const isFacebook = view === 'facebook';
+  const isWorkflow = view === 'workspace';
+  const isPublish = view === 'facebook-publish';
+  const isFacebookSettings = view.startsWith('facebook-') && !isPublish;
   const workspace = $('#view-workspace');
   const facebook = $('#view-facebook');
   if (!workspace || !facebook) return;
 
-  workspace.hidden = isFacebook;
-  facebook.hidden = !isFacebook;
+  workspace.hidden = !(isWorkflow || isPublish);
+  facebook.hidden = !isFacebookSettings;
+  $('#workflow-banner').hidden = !isWorkflow;
+  $('#management-page-heading').hidden = isWorkflow;
+  workspace.classList.toggle('workflow-publish-mode', isPublish);
+  const side = $('.col-side');
+  if (side) side.hidden = isPublish;
+  $('#card-facebook').hidden = !isPublish;
+  for (const panel of $$('[data-facebook-page]')) {
+    panel.hidden = panel.dataset.facebookPage !== view;
+  }
+  const pageCopy = {
+    'facebook-connection': ['Kết nối Facebook', 'Cấu hình token và thông số đăng Reels.'],
+    'facebook-pages': ['Quản lý Page', 'Theo dõi Page, chọn Page mặc định và gán nhóm trực tiếp trong bảng.'],
+    'facebook-groups': ['Nhóm Page', 'Tạo, sửa và xóa các nhóm chủ đề dùng khi đăng Reels.'],
+    'facebook-history': ['Lịch sử Reels', 'Xem lại các video đã đăng và kết quả từng Page.'],
+    'facebook-publish': ['Đăng Reels', 'Tạo clip từ URL YouTube và đăng tới tất cả Page hoặc một nhóm cụ thể.']
+  };
+  const copy = pageCopy[view] || pageCopy['facebook-connection'];
+  $('#management-page-title').textContent = copy[0];
+  $('#management-page-description').textContent = copy[1];
 
   for (const tab of $$('.view-tab')) {
-    const active = tab.dataset.view === view;
+    const active = tab.id === 'tab-workspace' ? isWorkflow : tab.id === 'tab-facebook' ? isFacebookSettings || isPublish : false;
     tab.classList.toggle('active', active);
     tab.setAttribute('aria-selected', String(active));
     tab.tabIndex = active ? 0 : -1;
   }
 
-  if (isFacebook && !state.fbConfig) loadFacebookConfig();
+  if (isFacebookSettings && !state.fbConfig) loadFacebookConfig();
 
-  const url = isFacebook ? '#facebook' : location.pathname + location.search;
+  const url = isWorkflow ? location.pathname + location.search : `#${view}`;
   history.replaceState(null, '', url);
   window.scrollTo({ top: 0, behavior: scrollBehavior() });
 }
 
 function openFacebookView() {
-  switchView('facebook');
+  switchView('facebook-connection');
+  $('#tab-facebook').setAttribute('aria-expanded', 'true');
+  $('#menu-facebook').setAttribute('aria-hidden', 'false');
+  $('#menu-facebook').classList.add('is-open');
   const search = $('#fb-page-search');
   const token = $('#set-fb-token');
   const target = search && !search.disabled ? search : token;
@@ -1201,7 +1519,10 @@ function toast(message, type = '') {
 /* ---------- Events ---------- */
 
 function bindEvents() {
-  $('#form-source').addEventListener('submit', startAnalyze);
+  $('#form-source').addEventListener('submit', (event) => {
+    event.preventDefault();
+    startBatch();
+  });
   $('#btn-hide-progress').addEventListener('click', () => {
     $('#card-progress').hidden = true;
     if (state.jobId) toast('Đang xử lý nền. Kết quả sẽ tự hiện khi xong.');
@@ -1210,6 +1531,7 @@ function bindEvents() {
   $('#btn-retry').addEventListener('click', () => startAnalyze());
   $('#btn-batch').addEventListener('click', startBatch);
   $('#btn-batch-publish').addEventListener('click', publishBatch);
+  $('#btn-batch-workflow').addEventListener('click', continueBatchWorkflow);
   $('#btn-batch-cancel').addEventListener('click', () => cancelBatch());
   $('#btn-batch-hide').addEventListener('click', () => {
     state.batchCollapsed = !state.batchCollapsed;
@@ -1281,6 +1603,17 @@ function bindEvents() {
   });
 
   $('#btn-settings').addEventListener('click', openSettings);
+  $("#btn-license-activate").addEventListener("click", async () => {
+    const button = $("#btn-license-activate");
+    button.disabled = true;
+    try {
+      await api("/license/activate", { method: "POST", body: { code: $("#license-activate-code").value } });
+      $("#license-activate-code").value = "";
+      $("#license-activate-status").textContent = "Kích hoạt thành công.";
+      await loadLicenseStatus();
+    } catch (error) { $("#license-activate-status").textContent = error.message; }
+    finally { button.disabled = false; }
+  });
   $('#btn-close-settings').addEventListener('click', closeSettings);
   $('#btn-cancel-settings').addEventListener('click', closeSettings);
   $('#btn-save-settings').addEventListener('click', async () => {
@@ -1302,14 +1635,52 @@ function bindEvents() {
     tab.addEventListener('click', () => switchView(tab.dataset.view));
     tab.addEventListener('keydown', onViewTabKeydown);
   });
+  $$('.sidebar-subitem').forEach((item) => {
+    item.addEventListener('click', (event) => {
+      event.preventDefault();
+      switchView(item.dataset.view);
+      const target = document.getElementById(item.dataset.target);
+      if (target && target.closest('#card-facebook')) $('#card-facebook').hidden = false;
+      if (target) window.setTimeout(() => target.scrollIntoView({ behavior: scrollBehavior(), block: 'start' }), 40);
+    });
+  });
+  $$('.view-tab[data-view]').forEach((toggle) => {
+    toggle.addEventListener('click', () => {
+      const panel = document.getElementById(toggle.dataset.menu);
+      if (!panel) return;
+      const open = toggle.getAttribute('aria-expanded') !== 'true';
+      toggle.setAttribute('aria-expanded', String(open));
+      panel.setAttribute('aria-hidden', String(!open));
+      panel.classList.toggle('is-open', open);
+    });
+  });
+  $$('.sidebar-settings-toggle').forEach((toggle) => {
+    toggle.addEventListener('click', () => {
+      const panel = document.getElementById(toggle.getAttribute('aria-controls'));
+      const open = toggle.getAttribute('aria-expanded') !== 'true';
+      toggle.setAttribute('aria-expanded', String(open));
+      panel.setAttribute('aria-hidden', String(!open));
+      panel.classList.toggle('is-open', open);
+    });
+  });
 
   $('#btn-fb-test').addEventListener('click', testFacebookToken);
   $('#btn-fb-load-pages').addEventListener('click', loadFacebookPages);
   $('#btn-fb-save').addEventListener('click', () => saveFacebookSettings());
+  $('#btn-fb-group-save').addEventListener('click', submitFbGroup);
+  $('#btn-fb-group-cancel').addEventListener('click', resetFbGroupEditor);
+  $('#fb-groups-list').addEventListener('click', onFbGroupAction);
+  $('#fb-group-select').addEventListener('change', updateFacebookUi);
   $('#fb-page-search').addEventListener('input', filterFbPages);
+  $('#fb-bulk-action').addEventListener('change', updateFbSelectionCount);
+  $('#btn-fb-assign-group').addEventListener('click', applyBulkPageGroup);
   $('#btn-fb-select-all').addEventListener('click', () => setVisibleFbPages(true));
   $('#btn-fb-clear-pages').addEventListener('click', () => setVisibleFbPages(false));
-  $('#fb-pages').addEventListener('change', updateFbSelectionCount);
+  $('#fb-pages').addEventListener('change', onFbPageTableChange);
+  $('#fb-pages').addEventListener('pointerdown', startFbPageSweep);
+  document.addEventListener('pointermove', continueFbPageSweep);
+  document.addEventListener('pointerup', endFbPageSweep);
+  document.addEventListener('pointercancel', endFbPageSweep);
 
   const dialog = $('#dialog-settings');
   dialog.addEventListener('click', (event) => {
@@ -1711,9 +2082,11 @@ async function startBatch() {
   state.batchPublished = {};
   state.batchPublishErrors = {};
   state.batchPublishing = false;
+  updateWorkflowStep(1);
 
   const card = $('#card-batch');
   card.hidden = false;
+  $('#btn-batch-workflow').hidden = true;
   $('#batch-grid').innerHTML = '';
   $('#batch-error').hidden = true;
   $('#batch-bar').style.width = '0%';
@@ -1811,6 +2184,9 @@ function renderBatch(data) {
   for (const item of items) {
     updateBatchCard(ensureBatchCard(item), item);
   }
+  const continueButton = $('#btn-batch-workflow');
+  if (continueButton) continueButton.hidden = data.status !== 'done' || !items.some((item) => item.status === 'done' && item.result && item.result.article);
+  if (data.status === 'done') updateWorkflowStep(2);
   updateBatchPublishButton();
   updateBatchCancelButton();
   renderBatchVisibility();
@@ -1875,11 +2251,17 @@ function updateBatchPublishCard(index) {
   if (item && card) updateBatchCard(card, item);
 }
 
-async function publishBatch() {
+async function publishBatch(options = {}) {
   if (state.batchPublishing) return;
   const pending = batchPendingItems();
+  if (!pending.length && options.continueToFacebook) {
+    await startFacebookForBatch();
+    return;
+  }
   if (!pending.length) {
     toast('Không còn bài nào cần đăng.', 'bad');
+    if (options.continueToFacebook) await startFacebookForBatch();
+    else toast('Không còn bài nào cần đăng.', 'bad');
     return;
   }
   if (!state.config || !state.config.hasSiteKey) {
@@ -1975,12 +2357,47 @@ async function publishBatch() {
       : `Đã đăng ${success} bài lên website.`
   );
 
+  if (options.continueToFacebook) await startFacebookForBatch();
   if (failures.length) {
     showBatchError(`Đăng lỗi ${failures.length} bài: ${failures.join(' · ')}`);
     toast(`Đăng được ${success}/${pending.length} bài.`, 'bad');
   } else {
     toast(`Đã đăng ${success} bài lên website.`, 'ok');
   }
+}
+
+async function continueBatchWorkflow() {
+  if (batchPendingItems().length) await publishBatch({ continueToFacebook: true });
+  else await startFacebookForBatch();
+}
+
+async function startFacebookForBatch() {
+  seedBatchPublishedFromHistory(state.batchItems);
+  const sources = (state.batchItems || [])
+    .filter((item) => item.status === 'done' && item.result && item.result.article)
+    .map((item) => {
+      const published = state.batchPublished[item.index];
+      return published && published.link ? `${item.url} | ${published.link}` : '';
+    })
+    .filter(Boolean);
+  if (!sources.length) {
+    toast('No published articles are available to continue to Reels.', 'bad');
+    return;
+  }
+  $('#fb-source-list').value = sources.join('\n');
+  updateWorkflowStep(3);
+  switchView('facebook-publish');
+  updateFacebookUi();
+  $('#card-facebook').scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
+  await startFacebookJob();
+}
+
+function updateWorkflowStep(step) {
+  $$('.workflow-steps li').forEach((item, index) => {
+    const number = index + 1;
+    item.classList.toggle('is-current', number === step);
+    item.classList.toggle('is-complete', number < step);
+  });
 }
 
 function ensureBatchCard(item) {
@@ -2868,7 +3285,7 @@ async function saveFacebookSettings({ silent = false } = {}) {
   const token = $('#set-fb-token').value.trim();
   if (token) payload.accessToken = token;
 
-  const status = $('#facebook-status');
+  const status = $('#fb-connection-status');
   if (button) button.disabled = true;
   if (status) status.textContent = 'Đang lưu...';
 

@@ -125,7 +125,7 @@ Hard rules:
 3. Clips must not overlap and must be ordered by start time.
 4. Each title must be 40-80 characters, specific, and must NOT contain hashtags.
 5. Each description must be 2-4 factual sentences that hook the viewer, without hashtags.
-6. Each clip must include 3-5 relevant English hashtags (no # prefix) based on that clip's topic.
+6. Add 3-5 English hashtags derived from important names, case names, organizations, and key phrases that appear in that clip's title or description. Do not invent entities or use broad generic tags. Format multiword phrases in PascalCase (for example: HarmonyMontgomery, ChildProtection, TrueCrime). Return hashtags without the # prefix and without spaces.
 7. Output a single valid JSON object. No markdown fences, no commentary.
 """
 

@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 .env
 .env.*
+env
 !.env.example
 data/config.json
 data/facebook.json

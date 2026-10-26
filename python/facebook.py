@@ -211,12 +211,11 @@ def normalize_hashtags(value: str) -> str:
 def build_caption(title: str, description: str, hashtags: str = "") -> str:
     tags = normalize_hashtags(hashtags)
     headline = (title or "").strip()
-    if tags:
-        headline = f"{headline} {tags}".strip()
     body = (description or "").strip()
-    if headline and body:
-        return f"{headline}\n\n{body}"
-    return headline or body
+    caption = "\n\n".join(part for part in (headline, body) if part)
+    if tags:
+        caption = f"{caption}\n\n{tags}".strip()
+    return caption
 
 
 def upload_reel(

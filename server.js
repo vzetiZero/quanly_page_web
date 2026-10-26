@@ -7,6 +7,8 @@ const multer = require('multer');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const config = require('./lib/config');
+const license = require('./lib/license');
+const cloudLicense = require('./lib/cloudflare-license');
 const fbConfig = require('./lib/facebook-config');
 const fbHistory = require('./lib/fb-history');
 const history = require('./lib/history');
@@ -27,6 +29,12 @@ app.use(express.json({ limit: '6mb' }));
 app.use('/api/app', (req, res, next) => {
   res.setHeader('Cache-Control', 'no-store');
   next();
+});
+app.use('/api/app', (req, res, next) => {
+  if (req.path.startsWith('/license') || req.path === '/health') return next();
+  Promise.resolve(cloudLicense.configured() ? cloudLicense.status() : license.status())
+    .then((status) => status.active ? next() : res.status(402).json({ message: 'Ứng dụng chưa được kích hoạt license trên thiết bị này.', licenseRequired: true }))
+    .catch((error) => res.status(503).json({ message: `Không kiểm tra được license: ${error.message}`, licenseRequired: true }));
 });
 app.use(express.static(PUBLIC_DIR));
 app.use('/downloads', express.static(path.join(__dirname, 'downloads'), { fallthrough: false }));
@@ -54,6 +62,12 @@ function httpError(status, message) {
 const asyncRoute = (handler) => (req, res, next) =>
   Promise.resolve(handler(req, res, next)).catch(next);
 
+app.get('/api/app/license/status', asyncRoute(async (req, res) => res.json(await (cloudLicense.configured() ? cloudLicense.status() : license.status()))));
+app.post('/api/app/license/activate', asyncRoute(async (req, res) => {
+  const result = cloudLicense.configured() ? await cloudLicense.activate(req.body?.code) : license.activate(req.body?.code);
+  if (!result.ok) return res.status(400).json({ message: result.message });
+  res.json(result);
+}));
 function isHttpUrl(value) {
   try {
     const parsed = new URL(value);
@@ -334,6 +348,7 @@ app.put('/api/app/facebook/config', (req, res) => {
   if (body.maxSeconds !== undefined) patch.maxSeconds = body.maxSeconds;
   if (body.vertical !== undefined) patch.vertical = Boolean(body.vertical);
   if (Array.isArray(body.selectedPageIds)) patch.selectedPageIds = body.selectedPageIds;
+  if (Array.isArray(body.groups)) patch.groups = body.groups;
   if (typeof body.apiVersion === 'string') patch.apiVersion = validateApiVersion(body.apiVersion);
 
   fbConfig.save(patch);
@@ -406,7 +421,9 @@ app.post('/api/app/facebook/batches', asyncRoute(async (req, res) => {
 
   const cfg = fbConfig.get();
   if (!cfg.accessToken) throw httpError(400, 'Chưa cấu hình Facebook access token. Mở Cài đặt.');
-  const pages = fbConfig.selectedPages();
+  const groupId = String((req.body && req.body.groupId) || '').trim();
+  if (groupId && !cfg.groups.some((group) => group.id === groupId)) throw httpError(400, 'NhÃ³m Page khÃ´ng cÃ²n tá»“n táº¡i.');
+  const pages = fbConfig.selectedPages(groupId);
   if (!pages.length) throw httpError(400, 'Chưa chọn Page nào. Mở Cài đặt để chọn Page.');
   const appCfg = config.get();
   const common = {
@@ -458,7 +475,9 @@ app.post('/api/app/facebook/jobs', asyncRoute(async (req, res) => {
   if (!cfg.accessToken) {
     throw httpError(400, 'Chưa cấu hình Facebook access token. Mở Cài đặt.');
   }
-  const pages = fbConfig.selectedPages();
+  const groupId = String(body.groupId || '').trim();
+  if (groupId && !cfg.groups.some((group) => group.id === groupId)) throw httpError(400, 'NhÃ³m Page khÃ´ng cÃ²n tá»“n táº¡i.');
+  const pages = fbConfig.selectedPages(groupId);
   if (!pages.length) {
     throw httpError(400, 'Chưa chọn Page nào. Mở Cài đặt, tải danh sách và chọn Page.');
   }
