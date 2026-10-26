@@ -119,7 +119,7 @@ def _fetch_pages_edge(
     limit: int = 100,
 ) -> list[dict]:
     items: list[dict] = []
-    params: dict[str, Any] = {"access_token": token, "fields": fields, "limit": limit}
+    params: dict[str, Any] | None = {"access_token": token, "fields": fields, "limit": limit}
     next_url: str | None = url
     for _ in range(20):
         if not next_url:
@@ -128,7 +128,8 @@ def _fetch_pages_edge(
         data = _raise_for_graph(response, "Tải danh sách Page")
         items.extend(item for item in data.get("data", []) if isinstance(item, dict))
         next_url = (data.get("paging") or {}).get("next")
-        params = {}
+        # paging.next đã chứa access_token/after; truyền params={} sẽ làm httpx bỏ query và Facebook trả #100.
+        params = None
     return items
 
 
