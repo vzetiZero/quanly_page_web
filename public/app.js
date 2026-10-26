@@ -1035,7 +1035,7 @@ function renderFbPages(pages, selectedIds) {
   if (!pages.length) {
     const row = document.createElement('tr');
     const cell = document.createElement('td');
-    cell.colSpan = 5;
+    cell.colSpan = 6;
     cell.className = 'muted small';
     cell.textContent = 'Ch\u01b0a t\u1ea3i danh s\u00e1ch Page.';
     row.appendChild(cell);
@@ -1089,11 +1089,52 @@ function renderFbPages(pages, selectedIds) {
     mode.className = allMode.has(String(page.id)) ? 'fb-mode-badge is-on' : 'fb-mode-badge';
     mode.textContent = allMode.has(String(page.id)) ? '\u0110ang b\u1eadt' : 'Ch\u01b0a b\u1eadt';
     modeCell.appendChild(mode);
-    row.append(selectCell, pageCell, categoryCell, groupCell, modeCell);
+    const actionCell = document.createElement('td');
+    actionCell.className = 'fb-page-actions';
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'btn btn-ghost btn-mini danger-text';
+    deleteButton.dataset.deletePage = page.id;
+    deleteButton.textContent = 'Xo\u00e1';
+    deleteButton.title = `Xo\u00e1 ${page.name || page.id} kh\u1ecfi danh s\u00e1ch \u0111\u00e3 l\u01b0u`;
+    deleteButton.setAttribute('aria-label', `Xo\u00e1 Page ${page.name || page.id}`);
+    actionCell.appendChild(deleteButton);
+    row.append(selectCell, pageCell, categoryCell, groupCell, modeCell, actionCell);
     container.appendChild(row);
   }
   updateFbSelectionCount();
   filterFbPages();
+  renderFbExcluded((state.fbConfig && state.fbConfig.excludedPages) || []);
+}
+
+function renderFbExcluded(items) {
+  const wrap = $('#fb-excluded');
+  const list = $('#fb-excluded-list');
+  if (!wrap || !list) return;
+  const excluded = Array.isArray(items) ? items : [];
+  const count = $('#fb-excluded-count');
+  if (count) count.textContent = String(excluded.length);
+  wrap.hidden = excluded.length === 0;
+  list.innerHTML = '';
+  for (const item of excluded) {
+    const li = document.createElement('li');
+    li.className = 'fb-excluded-item';
+    const info = document.createElement('span');
+    const name = document.createElement('strong');
+    name.textContent = item.name || item.id;
+    const id = document.createElement('small');
+    id.className = 'fb-page-id';
+    id.textContent = item.id;
+    info.append(name, id);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-ghost btn-mini';
+    button.dataset.restorePage = item.id;
+    button.textContent = 'Khôi phục';
+    button.setAttribute('aria-label', `Khôi phục Page ${item.name || item.id}`);
+    li.append(info, button);
+    list.appendChild(li);
+  }
 }
 
 function filterFbPages() {
@@ -1140,6 +1181,8 @@ function updateFbSelectionCount() {
   if (groupWrap) groupWrap.hidden = !action || action.value !== 'group';
   const applyButton = $('#btn-fb-assign-group');
   if (applyButton) applyButton.disabled = bulkSelected === 0 || !action || !action.value;
+  const deleteButton = $('#btn-fb-delete-pages');
+  if (deleteButton) deleteButton.disabled = bulkSelected === 0;
 }
 
 function setVisibleFbPages(checked) {
@@ -1169,6 +1212,88 @@ async function assignPagesToGroup(pageIds, groupId) {
     if (target) target.pageIds = [...new Set([...target.pageIds, ...ids])];
   }
   await saveFbGroups(groups);
+}
+
+async function deleteFbPages(ids) {
+  const unique = [...new Set((ids || []).map(String).filter(Boolean))];
+  if (!unique.length) return;
+  const status = $('#facebook-status');
+  status.textContent = `\u0110ang xo\u00e1 ${unique.length} Page...`;
+  try {
+    const response = await api('/facebook/pages', { method: 'DELETE', body: { ids: unique } });
+    state.fbConfig = response.config;
+    renderFbPages(state.fbConfig.pages || [], state.fbConfig.selectedPageIds || []);
+    renderFbGroups();
+    renderFbGroupSelect();
+    updateFacebookUi();
+    const removed = Number.isFinite(response.removed) ? response.removed : unique.length;
+    status.textContent = removed
+      ? `\u0110\u00e3 xo\u00e1 ${removed} Page kh\u1ecfi danh s\u00e1ch v\u00e0 th\u00eam v\u00e0o lo\u1ea1i tr\u1eeb.`
+      : 'Kh\u00f4ng c\u00f3 Page n\u00e0o b\u1ecb xo\u00e1.';
+    if (removed) toast(`\u0110\u00e3 xo\u00e1 ${removed} Page.`, 'ok');
+  } catch (err) {
+    status.textContent = err.message;
+    toast(err.message, 'bad');
+  }
+}
+
+function onFbPageDeleteClick(event) {
+  const button = event.target.closest('[data-delete-page]');
+  if (!button) return;
+  const page = ((state.fbConfig && state.fbConfig.pages) || []).find(
+    (item) => String(item.id) === String(button.dataset.deletePage)
+  );
+  if (!page) return;
+  const name = page.name || page.id;
+  const ok = window.confirm(
+    `Xo\u00e1 Page "${name}" kh\u1ecfi danh s\u00e1ch \u0111\u00e3 l\u01b0u?\nPage s\u1ebd b\u1ecb g\u1ee1 kh\u1ecfi ch\u1ebf \u0111\u1ed9 T\u1ea5t c\u1ea3 Page v\u00e0 m\u1ecdi nh\u00f3m.`
+  );
+  if (!ok) return;
+  deleteFbPages([page.id]);
+}
+
+function onFbDeleteSelectedPages() {
+  const ids = $$('#fb-pages .fb-page-bulk:checked').map((box) => box.value);
+  if (!ids.length) return;
+  const ok = window.confirm(
+    `Xo\u00e1 ${ids.length} Page \u0111\u00e3 ch\u1ecdn kh\u1ecfi danh s\u00e1ch \u0111\u00e3 l\u01b0u?\nC\u00e1c Page n\u00e0y s\u1ebd b\u1ecb g\u1ee1 kh\u1ecfi ch\u1ebf \u0111\u1ed9 T\u1ea5t c\u1ea3 Page v\u00e0 m\u1ecdi nh\u00f3m.`
+  );
+  if (!ok) return;
+  deleteFbPages(ids);
+}
+
+async function restoreFbPages(ids, all = false) {
+  const status = $('#facebook-status');
+  status.textContent = all ? 'Đang khôi phục tất cả Page...' : `Đang khôi phục ${ids.length} Page...`;
+  try {
+    const response = await api('/facebook/pages/restore', {
+      method: 'POST',
+      body: all ? { all: true } : { ids }
+    });
+    state.fbConfig = response.config;
+    renderFbExcluded(state.fbConfig.excludedPages || []);
+    updateFacebookUi();
+    const restored = Number.isFinite(response.restored) ? response.restored : 0;
+    status.textContent = restored
+      ? `Đã bỏ loại trừ ${restored} Page. Bấm "Tải danh sách Page" để thêm lại vào danh sách.`
+      : 'Không có Page nào cần khôi phục.';
+    if (restored) toast(`Đã bỏ loại trừ ${restored} Page.`, 'ok');
+  } catch (err) {
+    status.textContent = err.message;
+    toast(err.message, 'bad');
+  }
+}
+
+function onFbRestorePageClick(event) {
+  const button = event.target.closest('[data-restore-page]');
+  if (!button) return;
+  restoreFbPages([button.dataset.restorePage]);
+}
+
+function onFbRestoreAllPages() {
+  const count = ((state.fbConfig && state.fbConfig.excludedPages) || []).length;
+  if (!count) return;
+  restoreFbPages([], true);
 }
 
 async function onFbPageTableChange(event) {
@@ -1676,6 +1801,10 @@ function bindEvents() {
   $('#btn-fb-assign-group').addEventListener('click', applyBulkPageGroup);
   $('#btn-fb-select-all').addEventListener('click', () => setVisibleFbPages(true));
   $('#btn-fb-clear-pages').addEventListener('click', () => setVisibleFbPages(false));
+  $('#btn-fb-delete-pages').addEventListener('click', onFbDeleteSelectedPages);
+  $('#fb-pages').addEventListener('click', onFbPageDeleteClick);
+  $('#fb-excluded-list').addEventListener('click', onFbRestorePageClick);
+  $('#btn-fb-restore-all').addEventListener('click', onFbRestoreAllPages);
   $('#fb-pages').addEventListener('change', onFbPageTableChange);
   $('#fb-pages').addEventListener('pointerdown', startFbPageSweep);
   document.addEventListener('pointermove', continueFbPageSweep);

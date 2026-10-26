@@ -482,6 +482,7 @@
         <div class="fb-bulk-toolbar">
           <button class="btn btn-mini" id="btn-fb-select-all" type="button">Ch&#x1ECD;n t&#x1EA5;t c&#x1EA3;</button>
           <button class="btn btn-mini" id="btn-fb-clear-pages" type="button">B&#x1ECF; ch&#x1ECD;n</button>
+          <button class="btn btn-mini danger-text" id="btn-fb-delete-pages" type="button" disabled>Xo&#xE1; Page &#x111;&#xE3; ch&#x1ECD;n</button>
           <label class="fb-bulk-target"><span>Thao t&#xE1;c v&#x1EDB;i Page &#x111;&#xE3; ch&#x1ECD;n</span><select id="fb-bulk-action"><option value="">Ch&#x1ECD;n thao t&#xE1;c</option><option value="group">G&#xE1;n v&#xE0;o nh&#xF3;m</option><option value="all-on">Th&#xEA;m v&#xE0;o ch&#x1EBF; &#x111;&#x1ED9; T&#x1EA5;t c&#x1EA3; Page</option><option value="all-off">Lo&#x1EA1;i kh&#x1ECF;i ch&#x1EBF; &#x111;&#x1ED9; T&#x1EA5;t c&#x1EA3; Page</option></select></label>
           <label class="fb-bulk-group-wrap" id="fb-bulk-group-wrap" hidden><span>Nh&#xF3;m</span><select id="fb-bulk-group-target"><option value="">Kh&#xF4;ng thu&#x1ED9;c nh&#xF3;m</option></select></label>
           <button class="btn btn-primary btn-mini" id="btn-fb-assign-group" type="button" disabled>Th&#x1EF1;c hi&#x1EC7;n</button>
@@ -490,11 +491,22 @@
         <p class="hint fb-table-hint">Ch&#x1ECD;n Page b&#x1EB1;ng checkbox duy nh&#x1EA5;t ho&#x1EB7;c nh&#x1EA5;n gi&#x1EEF; r&#x1ED3;i r&#xEA; qua c&#xE1;c h&#xE0;ng. Sau &#x111;&#xF3; ch&#x1ECD;n thao t&#xE1;c ph&#xED;a tr&#xEA;n.</p>
         <div class="fb-table-wrap">
           <table class="fb-page-table">
-            <thead><tr><th>Ch&#x1ECD;n</th><th>Page</th><th>Danh m&#x1EE5;c</th><th>Nh&#xF3;m Page</th><th>Ch&#x1EBF; &#x111;&#x1ED9; t&#x1EA5;t c&#x1EA3;</th></tr></thead>
-            <tbody class="fb-pages" id="fb-pages"><tr><td colspan="5" class="muted small">Chưa tải danh sách Page.</td></tr></tbody>
+            <thead><tr><th>Ch&#x1ECD;n</th><th>Page</th><th>Danh m&#x1EE5;c</th><th>Nh&#xF3;m Page</th><th>Ch&#x1EBF; &#x111;&#x1ED9; t&#x1EA5;t c&#x1EA3;</th><th>Thao t&#xE1;c</th></tr></thead>
+            <tbody class="fb-pages" id="fb-pages"><tr><td colspan="6" class="muted small">Chưa tải danh sách Page.</td></tr></tbody>
           </table>
         </div>
         <p class="fb-empty" id="fb-pages-empty" hidden></p>
+
+        <div class="fb-excluded" id="fb-excluded" hidden>
+          <div class="fb-excluded-head">
+            <div>
+              <h4>Page đã loại trừ (<span id="fb-excluded-count">0</span>)</h4>
+              <p class="muted small">Các Page này sẽ không xuất hiện lại khi bấm "Tải danh sách Page". Khôi phục rồi tải lại để thêm vào danh sách.</p>
+            </div>
+            <button class="btn btn-mini" id="btn-fb-restore-all" type="button">Khôi phục tất cả</button>
+          </div>
+          <ul class="fb-excluded-list" id="fb-excluded-list"></ul>
+        </div>
 
         <p class="muted small fb-page-status" id="facebook-status" role="status"></p>
       </div>

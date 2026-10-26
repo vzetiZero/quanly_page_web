@@ -387,6 +387,25 @@ app.post('/api/app/facebook/pages', asyncRoute(async (req, res) => {
   });
 }));
 
+app.delete('/api/app/facebook/pages', (req, res) => {
+  const body = req.body || {};
+  const ids = Array.isArray(body.ids) ? [...new Set(body.ids.map(String).filter(Boolean))] : [];
+  if (!ids.length) throw httpError(400, 'Chưa chọn Page để xoá.');
+  const before = fbConfig.get().pages.length;
+  const config = fbConfig.removePages(ids);
+  res.json({ ok: true, removed: before - config.pages.length, config: fbConfig.publicConfig() });
+});
+
+app.post('/api/app/facebook/pages/restore', (req, res) => {
+  const body = req.body || {};
+  const all = body.all === true;
+  const ids = Array.isArray(body.ids) ? [...new Set(body.ids.map(String).filter(Boolean))] : [];
+  if (!all && !ids.length) throw httpError(400, 'Chưa chọn Page để khôi phục.');
+  const before = fbConfig.get().excludedPages.length;
+  const config = fbConfig.restorePages(all ? null : ids);
+  res.json({ ok: true, restored: before - config.excludedPages.length, config: fbConfig.publicConfig() });
+});
+
 app.post('/api/app/facebook/batches', asyncRoute(async (req, res) => {
   const body = req.body || {};
   const rawSources = Array.isArray(body.sources) ? body.sources : [];
